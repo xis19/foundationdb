@@ -74,6 +74,7 @@ static std::vector<CommitTransactionRequest> prepareSplitTransactions(
         newRef.splitID = splitID;
         newRef.numParts = numProxies;
         newRef.partIndex = i;
+        newRef.flags |= CommitTransactionRequest::FLAG_FIRST_IN_BATCH;
 
         newRef.transaction.mutations = VectorRef<MutationRef>();
     }

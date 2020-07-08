@@ -976,6 +976,20 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 			}
 		}
 
+		Version version = self->version;
+		
+		if (req.splitID.present()) {
+			auto cachedVersion = SplitIDVersionCache::instance().query(req.splitID.get());
+			std::cout<<"Using split id: " << req.splitID.get().toString() << "   ";
+			if (cachedVersion.present()) {
+				version = cachedVersion.get();
+				std::cout<<"old value: "<< version << std::endl;
+			} else {
+				std::cout<<"new value: "<<version<<std::endl;
+				SplitIDVersionCache::instance().add(req.splitID.get(), version);
+			}
+		}
+
 		rep.version = self->version;
 		rep.requestNum = req.requestNum;
 

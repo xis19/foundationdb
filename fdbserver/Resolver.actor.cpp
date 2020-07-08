@@ -109,10 +109,6 @@ ACTOR Future<Void> resolveBatch(
 	state NetworkAddress proxyAddress = req.prevVersion >= 0 ? req.reply.getEndpoint().getPrimaryAddress() : NetworkAddress();
 	state ProxyRequestsInfo &proxyInfo = self->proxyInfoMap[proxyAddress];
 
-	std::cout << "resolveBatch" << std::endl;
-	std::cout << "PrevVersion " << req.prevVersion << std::endl;
-	std::cout << "LastReceivedVersion " << req.lastReceivedVersion << std::endl;
-
 	++self->resolveBatchIn;
 
 	if(req.debugID.present()) {
@@ -318,8 +314,6 @@ ACTOR Future<Void> resolverCore(
 	state Reference<Resolver> self( new Resolver(resolver.id(), initReq.proxyCount, initReq.resolverCount) );
 	state ActorCollection actors(false);
 	state Future<Void> doPollMetrics = self->resolverCount > 1 ? Void() : Future<Void>(Never());
-
-	printf("resolverCore\n");
 
 	actors.add( waitFailureServer(resolver.waitFailure.getFuture()) );
 	actors.add( traceRole(Role::RESOLVER, resolver.id()) );

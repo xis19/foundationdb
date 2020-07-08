@@ -168,7 +168,7 @@ struct GetCommitVersionRequest {
 	UID requestingProxy;
 	ReplyPromise<GetCommitVersionReply> reply;
 
-	Optional<std::vector<UID>> splitIDs;
+	Optional<UID> splitID;
 
 	GetCommitVersionRequest() { }
 	GetCommitVersionRequest(uint64_t requestNum, uint64_t mostRecentProcessedRequestNum, UID requestingProxy)
@@ -176,7 +176,7 @@ struct GetCommitVersionRequest {
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, requestNum, mostRecentProcessedRequestNum, requestingProxy, reply, splitIDs);
+		serializer(ar, requestNum, mostRecentProcessedRequestNum, requestingProxy, reply, splitID);
 	}
 };
 
