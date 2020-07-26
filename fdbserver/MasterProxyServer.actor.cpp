@@ -498,6 +498,41 @@ struct ProxyCommitData {
 	}
 };
 
+/// A handy applyMetadataMutations uses ProxyCommitData class
+void applyMetadataMutations(
+		ProxyCommitData& proxyCommitData,
+		Arena& arena,
+		const VectorRef<MutationRef>& mutations,
+		LogPushData* pToCommit,
+		bool& confChange,
+		Version popVersion) {
+	
+	std::map<Key, applyMutationsData>* pUidApplyMutationsData = nullptr;
+	if (proxyCommitData.firstProxy) {
+		pUidApplyMutationsData = &proxyCommitData.uid_applyMutationsData;
+	}
+
+	applyMetadataMutations(
+		proxyCommitData.dbgid,
+		arena,
+		mutations,
+		proxyCommitData.txnStateStore,
+		pToCommit,
+		&confChange,
+		proxyCommitData.logSystem,
+		popVersion,
+		&proxyCommitData.vecBackupKeys,
+		&proxyCommitData.keyInfo,
+		&proxyCommitData.cacheInfo,
+		pUidApplyMutationsData,
+		proxyCommitData.commit,
+		proxyCommitData.cx,
+		&proxyCommitData.committedVersion,
+		&proxyCommitData.storageCache,
+		&proxyCommitData.tag_popped
+	);
+}
+
 struct ResolutionRequestBuilder {
 	ProxyCommitData* self;
 	vector<ResolveTransactionBatchRequest> requests;
@@ -1103,9 +1138,13 @@ ACTOR Future<Void> postResolution(Context* self) {
 				committed = committed && self->resolution[resolver].stateMutations[versionIndex][transactionIndex].committed;
 			if (committed)
 				applyMetadataMutations(
-					pProxyCommitData->dbgid, self->arena,
+					*pProxyCommitData,
+					self->arena,
 					self->resolution[0].stateMutations[versionIndex][transactionIndex].mutations,
-					pProxyCommitData->txnStateStore, nullptr, &self->forceRecovery, pProxyCommitData->logSystem, 0, &pProxyCommitData->vecBackupKeys, &pProxyCommitData->keyInfo, &pProxyCommitData->cacheInfo, pProxyCommitData->firstProxy ? &pProxyCommitData->uid_applyMutationsData : nullptr, pProxyCommitData->commit, pProxyCommitData->cx, &pProxyCommitData->committedVersion, &pProxyCommitData->storageCache, &pProxyCommitData->tag_popped);
+					nullptr,
+					self->forceRecovery,
+					0
+				);
 
 			if( self->resolution[0].stateMutations[versionIndex][transactionIndex].mutations.size() && self->firstStateMutations ) {
 				ASSERT(committed);
@@ -1186,22 +1225,12 @@ ACTOR Future<Void> postResolution(Context* self) {
 		if (self->committed[t] == ConflictBatch::TransactionCommitted && (!self->locked || trs[t].isLockAware())) {
 			self->commitCount++;
 			applyMetadataMutations(
-				pProxyCommitData->dbgid, self->arena,
+				*pProxyCommitData,
+				self->arena,
 				trs[t].transaction.mutations,
-				pProxyCommitData->txnStateStore,
 				&self->toCommit,
-				&self->forceRecovery,
-				pProxyCommitData->logSystem,
-				self->commitVersion + 1,
-				&pProxyCommitData->vecBackupKeys,
-				&pProxyCommitData->keyInfo,
-				&pProxyCommitData->cacheInfo,
-				pProxyCommitData->firstProxy ? &pProxyCommitData->uid_applyMutationsData : nullptr,
-				pProxyCommitData->commit,
-				pProxyCommitData->cx,
-				&pProxyCommitData->committedVersion,
-				&pProxyCommitData->storageCache,
-				&pProxyCommitData->tag_popped
+				self->forceRecovery,
+				self->commitVersion + 1
 			);
 		}
 		if(self->firstStateMutations) {
@@ -2397,7 +2426,14 @@ ACTOR Future<Void> masterProxyServerCore(
 
 						Arena arena;
 						bool confChanges;
-						applyMetadataMutations(commitData.dbgid, arena, mutations, commitData.txnStateStore, nullptr, &confChanges, Reference<ILogSystem>(), 0, &commitData.vecBackupKeys, &commitData.keyInfo, &commitData.cacheInfo, commitData.firstProxy ? &commitData.uid_applyMutationsData : nullptr, commitData.commit, commitData.cx, &commitData.committedVersion, &commitData.storageCache, &commitData.tag_popped, true );
+						applyMetadataMutations(
+							commitData,
+							arena,
+							mutations,
+							nullptr,
+							confChanges,
+							0
+						);
 					}
 
 					auto lockedKey = commitData.txnStateStore->readValue(databaseLockedKey).get();
