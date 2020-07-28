@@ -1469,7 +1469,7 @@ ACTOR Future<Void> postResolution(Context* self) {
 				         GetReadVersionRequest(waitVersionSpan.context, 0, TransactionPriority::IMMEDIATE,
 				                               GetReadVersionRequest::FLAG_CAUSAL_READ_RISKY)))) {
 					if (v.version > pProxyCommitData->committedVersion.get()) {
-						self->locked = v.locked;
+						pProxyCommitData->locked = v.locked;
 						pProxyCommitData->metadataVersion = v.metadataVersion;
 						pProxyCommitData->committedVersion.set(v.version);
 					}
