@@ -3322,10 +3322,17 @@ ACTOR Future<TransactionCommitCostEstimation> estimateCommitCosts(Transaction* s
 	return trCommitCosts;
 }
 
-ACTOR static Future<Void> tryCommit( Database cx, Reference<TransactionLogInfo> trLogInfo, CommitTransactionRequest req, Future<Version> readVersion, TransactionInfo info, Version* pCommittedVersion, Transaction* tr, TransactionOptions options) {
+ACTOR static Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion) {
 	state TraceInterval interval( "TransactionCommit" );
 	state double startTime = now();
+	state const Database cx = tr->getDatabase();
+	state CommitTransactionRequest req = tr->getCommitTransactionRequest();
+	state TransactionInfo& info = tr->info;
+	state Version& committedVersion = tr->getCommittedVersion();
+	state Reference<TransactionLogInfo> trLogInfo = tr->trLogInfo;
+	state TransactionOptions& options = tr->options;
 	state Span span("NAPI:tryCommit"_loc, info.spanID);
+
 	req.spanContext = span.context;
 	if (info.debugID.present())
 		TraceEvent(interval.begin()).detail( "Parent", info.debugID.get() );
@@ -3379,7 +3386,7 @@ ACTOR static Future<Void> tryCommit( Database cx, Reference<TransactionLogInfo> 
 					}
 					if (info.debugID.present())
 						TraceEvent(interval.end()).detail("CommittedVersion", v);
-					*pCommittedVersion = v;
+					committedVersion = v;
 					if(v > cx->metadataVersionCache[cx->mvCacheInsertLocation].first) {
 						cx->mvCacheInsertLocation = (cx->mvCacheInsertLocation + 1)%cx->metadataVersionCache.size();
 						cx->metadataVersionCache[cx->mvCacheInsertLocation] = std::make_pair(v, ci.metadataVersion);
@@ -3470,7 +3477,6 @@ ACTOR static Future<Void> tryCommit( Database cx, Reference<TransactionLogInfo> 
 	}
 }
 
-
 Future<Void> Transaction::commitMutations() {
 	try {
 		//if this is a read-only transaction return immediately
@@ -3545,7 +3551,7 @@ Future<Void> Transaction::commitMutations() {
 			tr.transaction.report_conflicting_keys = true;
 		}
 
-		Future<Void> commitResult = tryCommit( cx, trLogInfo, tr, readVersion, info, &this->committedVersion, this, options );
+		Future<Void> commitResult = tryCommit(this, readVersion);
 
 		if (isCheckingWrites) {
 			Promise<Void> committed;
@@ -4420,6 +4426,22 @@ Reference<TransactionLogInfo> Transaction::createTrLogInfoProbabilistically(cons
 	}
 
 	return Reference<TransactionLogInfo>();
+}
+
+Version& Transaction::getCommittedVersion() {
+	return this->committedVersion;
+}
+
+const Version& Transaction::getCommittedVersion() const {
+	return this->committedVersion;
+}
+
+CommitTransactionRequest& Transaction::getCommitTransactionRequest() {
+	return this->tr;
+}
+
+const CommitTransactionRequest& Transaction::getCommitTransactionRequest() const {
+	return this->tr;
 }
 
 void enableClientInfoLogging() {
