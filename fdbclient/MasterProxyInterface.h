@@ -139,12 +139,61 @@ struct CommitID {
 	    conflictingKRIndices(conflictingKRIndices) {}
 };
 
+/**
+ * @struct SplitTransaction
+ * @brief The data
+ */
+struct SplitTransaction {
+	constexpr static FileIdentifier file_identifier = 973581;
+
+	/// The unique ID of the transaction that is split
+	UID id;
+
+	/// Total number of parts
+	int totalParts;
+
+	/// The index of the current part
+	int partIndex;
+
+	SplitTransaction() : id(), totalParts(1), partIndex(0) {}
+
+	SplitTransaction(const UID& id_, const int totalParts_, const int partIndex_)
+	  : id(id_), totalParts(totalParts_), partIndex(partIndex_) {}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, id, totalParts, partIndex);
+	}
+};
+
+/**
+ * When the values in all KV pairs in a given transaction is larger than this
+ * value, the transaction will be split and distributed to multiple proxies,
+ * if possible.
+ * FIXME: change it to 1048576
+ */
+constexpr int MAX_SINGLE_TRANSACTION_VALUES_SIZE = 110 * 1024;
+
+/**
+ * Check if a transaction is large and should be split.
+ *
+ * @param commitTxnRequest Commit transaction request
+ * @param numProxies Number of proxies
+ */
+extern bool shouldSplitCommitTransactionRequest(const CommitTransactionRequest&, const int);
+
+/**
+ * Evenly split mutations in a given transaction into multiple transactions
+ * per proxy.
+ *
+ * @param commitTransactionRequest
+ * @param numProxies Number of proxies
+ */
+extern std::vector<CommitTransactionRequest> splitCommitTransactionRequest(const CommitTransactionRequest&, const int);
+
 struct CommitTransactionRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 93948;
-	enum { 
-		FLAG_IS_LOCK_AWARE = 0x1,
-		FLAG_FIRST_IN_BATCH = 0x2
-	};
+	enum { FLAG_IS_LOCK_AWARE = 0x1, FLAG_FIRST_IN_BATCH = 0x2 };
 
 	bool isLockAware() const { return (flags & FLAG_IS_LOCK_AWARE) != 0; }
 	bool firstInBatch() const { return (flags & FLAG_FIRST_IN_BATCH) != 0; }
@@ -157,18 +206,20 @@ struct CommitTransactionRequest : TimedRequest {
 	Optional<UID> debugID;
 	Optional<TransactionCommitCostEstimation> commitCostEstimation;
 	Optional<TagSet> tagSet;
+	Optional<SplitTransaction> splitTransaction;
 
 	CommitTransactionRequest() : flags(0) {}
 
-	template <class Ar> 
-	void serialize(Ar& ar) { 
-		serializer(ar, transaction, reply, arena, flags, debugID, commitCostEstimation, tagSet, spanContext);
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, transaction, reply, arena, flags, debugID, commitCostEstimation, tagSet, spanContext,
+		           splitTransaction);
 	}
 };
 
 static inline int getBytes( CommitTransactionRequest const& r ) {
 	// SOMEDAY: Optimize
-	//return r.arena.getSize(); // NOT correct because arena can be shared!
+	// return r.arena.getSize(); // NOT correct because arena can be shared!
 	int total = sizeof(r);
 	for(auto m = r.transaction.mutations.begin(); m != r.transaction.mutations.end(); ++m)
 		total += m->expectedSize() + CLIENT_KNOBS->PROXY_COMMIT_OVERHEAD_BYTES;
@@ -197,8 +248,9 @@ struct GetReadVersionReply : public BasicLoadBalancedReply {
 
 struct GetReadVersionRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 838566;
-	enum { 
-		PRIORITY_SYSTEM_IMMEDIATE = 15 << 24,  // Highest possible priority, always executed even if writes are otherwise blocked
+	enum {
+		PRIORITY_SYSTEM_IMMEDIATE =
+		    15 << 24, // Highest possible priority, always executed even if writes are otherwise blocked
 		PRIORITY_DEFAULT = 8 << 24,
 		PRIORITY_BATCH = 1 << 24
 	};
@@ -243,8 +295,8 @@ struct GetReadVersionRequest : TimedRequest {
 
 	bool operator < (GetReadVersionRequest const& rhs) const { return priority < rhs.priority; }
 
-	template <class Ar> 
-	void serialize(Ar& ar) { 
+	template <class Ar>
+	void serialize(Ar& ar) {
 		serializer(ar, transactionCount, flags, tags, debugID, reply, spanContext);
 
 		if(ar.isDeserializing) {
@@ -291,7 +343,7 @@ struct GetKeyServerLocationsRequest {
 	  : spanContext(spanContext), begin(begin), end(end), limit(limit), reverse(reverse), arena(arena) {}
 
 	template <class Ar>
-	void serialize(Ar& ar) { 
+	void serialize(Ar& ar) {
 		serializer(ar, begin, end, limit, reverse, reply, spanContext, arena);
 	}
 };
@@ -349,8 +401,8 @@ struct TxnStateRequest {
 	std::vector<Endpoint> broadcastInfo;
 	ReplyPromise<Void> reply;
 
-	template <class Ar> 
-	void serialize(Ar& ar) { 
+	template <class Ar>
+	void serialize(Ar& ar) {
 		serializer(ar, data, sequence, last, broadcastInfo, reply, arena);
 	}
 };
