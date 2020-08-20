@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include <chrono>
 #include <iterator>
 
 #include "fdbclient/NativeAPI.actor.h"
@@ -41,6 +42,7 @@
 #include "fdbserver/ProxyCommitData.actor.h"
 #include "fdbserver/RecoveryState.h"
 #include "fdbserver/ServerDBInfo.h"
+#include "fdbserver/TimedKVCache.h"
 #include "fdbserver/WaitFailure.h"
 #include "fdbserver/WorkerInterface.actor.h"
 #include "flow/ActorCollection.h"
@@ -51,6 +53,12 @@
 using std::vector;
 using std::min;
 using std::max;
+
+using namespace std::literals::chrono_literals;
+
+using SplitIDVersionCache = TimedKVCache<UID, Version>;
+
+SplitIDVersionCache splitIDVersionCache(5s);
 
 struct ProxyVersionReplies {
 	std::map<uint64_t, GetCommitVersionReply> replies;
@@ -982,7 +990,17 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 			}
 		}
 
-		rep.version = self->version;
+		// FIXME rethink about this versioning issue -- any corner issues?
+		Version repVersion = self->version;
+		if (req.splitID.present()) {
+			const auto& splitID = req.splitID.get();
+			if (!splitIDVersionCache.exists(splitID)) {
+				splitIDVersionCache.add(splitID, repVersion);
+			} else {
+				repVersion = splitIDVersionCache.get(splitID);
+			}
+		}
+		rep.version = repVersion;
 		rep.requestNum = req.requestNum;
 
 		proxyItr->second.replies.erase(proxyItr->second.replies.begin(), proxyItr->second.replies.upper_bound(req.mostRecentProcessedRequestNum));

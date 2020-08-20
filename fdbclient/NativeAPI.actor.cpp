@@ -3084,6 +3084,7 @@ void TransactionOptions::clear() {
 	checkWritesEnabled = false;
 	causalWriteRisky = false;
 	commitOnFirstProxy = false;
+	commitOnGivenProxy = false;
 	debugDump = false;
 	lockAware = false;
 	readOnly = false;
@@ -3322,13 +3323,20 @@ ACTOR Future<TransactionCommitCostEstimation> estimateCommitCosts(Transaction* s
 	return trCommitCosts;
 }
 
-ACTOR static Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion) {
+#include "debug.h"
+
+ACTOR static Future<Void> tryCommitSingleTransaction(Transaction* tr, Future<Version> readVersion,
+                                                     CommitTransactionRequest* pRequest = nullptr,
+                                                     Version* pCommittedVersion = nullptr,
+                                                     Promise<Standalone<StringRef>>* pVersionstampPromise = nullptr) {
 	state TraceInterval interval( "TransactionCommit" );
 	state double startTime = now();
 	state const Database cx = tr->getDatabase();
-	state CommitTransactionRequest req = tr->getCommitTransactionRequest();
+	state CommitTransactionRequest& req = pRequest == nullptr ? tr->getCommitTransactionRequest() : *pRequest;
 	state TransactionInfo& info = tr->info;
-	state Version& committedVersion = tr->getCommittedVersion();
+	state Promise<Standalone<StringRef>>& versionstampPromise =
+	    pVersionstampPromise == nullptr ? tr->versionstampPromise : *pVersionstampPromise;
+	state Version& committedVersion = pCommittedVersion == nullptr ? tr->getCommittedVersion() : *pCommittedVersion;
 	state Reference<TransactionLogInfo> trLogInfo = tr->trLogInfo;
 	state TransactionOptions& options = tr->options;
 	state Span span("NAPI:tryCommit"_loc, info.spanID);
@@ -3369,6 +3377,11 @@ ACTOR static Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion
 				const std::vector<MasterProxyInterface>& proxies = cx->clientInfo->get().proxies;
 				reply = proxies.size() ? throwErrorOr ( brokenPromiseToMaybeDelivered ( proxies[0].commit.tryGetReply(req) ) ) : Never();
 			}
+		} else if (options.commitOnGivenProxy) {
+			const auto& proxies = cx->clientInfo->get().proxies;
+			const auto& proxy = proxies[req.splitTransaction.get().partIndex];
+			COUT << "commitOnGivenProxy: " << req.splitTransaction.get().partIndex << std::endl;
+			reply = brokenPromiseToMaybeDelivered(proxy.commit.getReply(req));
 		} else {
 			reply = basicLoadBalance( cx->getMasterProxies(info.useProvisionalProxies), &MasterProxyInterface::commit, req, TaskPriority::DefaultPromiseEndpoint, true );
 		}
@@ -3394,7 +3407,7 @@ ACTOR static Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion
 
 					Standalone<StringRef> ret = makeString(10);
 					placeVersionstamp(mutateString(ret), v, ci.txnBatchId);
-					tr->versionstampPromise.send(ret);
+					versionstampPromise.send(ret);
 
 					tr->numErrors = 0;
 					++cx->transactionsCommitCompleted;
@@ -3475,6 +3488,49 @@ ACTOR static Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion
 			throw;
 		}
 	}
+}
+
+ACTOR Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion) {
+	state CommitTransactionRequest commitTxnRequest = tr->getCommitTransactionRequest();
+	state const int numProxies = tr->getDatabase()->clientInfo->get().proxies.size();
+
+	if (!shouldSplitCommitTransactionRequest(tr->getCommitTransactionRequest(), numProxies)) {
+		wait(tryCommitSingleTransaction(tr, readVersion));
+		return Void();
+	}
+
+	// Split the transaction
+	state std::vector<CommitTransactionRequest> commitTransactionRequests =
+	    splitCommitTransactionRequest(commitTxnRequest, numProxies);
+	state std::vector<Version> committedVersions(numProxies);
+	state std::vector<Promise<Standalone<StringRef>>> versionstampPromises(numProxies);
+	state std::vector<Future<Void>> responses;
+
+	tr->options.commitOnGivenProxy = true;
+	for (int i = 0; i < numProxies; ++i) {
+		responses.emplace_back(tryCommitSingleTransaction(tr, readVersion, &commitTransactionRequests[i],
+		                                                  &committedVersions[i], &versionstampPromises[i]));
+		COUT << commitTransactionRequests[i].splitTransaction.get().id.toString() << "   "
+		     << commitTransactionRequests[i].splitTransaction.get().partIndex << "/"
+		     << commitTransactionRequests[i].splitTransaction.get().totalParts << std::endl;
+	}
+
+	try {
+		wait(waitForAll(responses));
+	} catch (Error& e) {
+		COUT << "ERROR: " << e.what() << std::endl;
+		throw;
+	}
+
+	for (int i = 0; i < numProxies; ++i) {
+		COUT << "Proxy " << i << " Committed Version " << committedVersions[i] << " Versionstamp "
+		     << versionstampPromises[i].getFuture().get().toHexString() << std::endl;
+	}
+
+	tr->getCommittedVersion() = committedVersions.front();
+	tr->versionstampPromise.swap(versionstampPromises.front());
+
+	return Void();
 }
 
 Future<Void> Transaction::commitMutations() {

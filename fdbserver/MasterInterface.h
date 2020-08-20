@@ -168,6 +168,7 @@ struct GetCommitVersionRequest {
 	uint64_t mostRecentProcessedRequestNum;
 	UID requestingProxy;
 	ReplyPromise<GetCommitVersionReply> reply;
+	Optional<UID> splitID;
 
 	GetCommitVersionRequest() { }
 	GetCommitVersionRequest(SpanID spanContext, uint64_t requestNum, uint64_t mostRecentProcessedRequestNum,

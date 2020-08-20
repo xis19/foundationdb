@@ -18,19 +18,60 @@
  * limitations under the License.
  */
 
-#include "flow/ActorCollection.h"
+#include <chrono>
+
 #include "fdbclient/NativeAPI.actor.h"
-#include "fdbserver/ResolverInterface.h"
-#include "fdbserver/MasterInterface.h"
-#include "fdbserver/WorkerInterface.actor.h"
-#include "fdbserver/WaitFailure.h"
-#include "fdbserver/Knobs.h"
-#include "fdbserver/ServerDBInfo.h"
-#include "fdbserver/Orderer.actor.h"
-#include "fdbserver/ConflictSet.h"
-#include "fdbserver/StorageMetrics.h"
 #include "fdbclient/SystemData.h"
+#include "fdbserver/ConflictSet.h"
+#include "fdbserver/Knobs.h"
+#include "fdbserver/MasterInterface.h"
+#include "fdbserver/Orderer.actor.h"
+#include "fdbserver/PartMerger.h"
+#include "fdbserver/ResolverInterface.h"
+#include "fdbserver/ServerDBInfo.h"
+#include "fdbserver/StorageMetrics.h"
+#include "fdbserver/TimedKVCache.h"
+#include "fdbserver/WaitFailure.h"
+#include "fdbserver/WorkerInterface.actor.h"
+#include "flow/ActorCollection.h"
+
+#include "debug.h"
+
 #include "flow/actorcompiler.h"  // This must be the last #include.
+
+namespace {
+using namespace std::literals::chrono_literals;
+
+class ResolveTransactionBatchRequestMerger : public PartMerger<UID, ResolveTransactionBatchRequest> {
+protected:
+	virtual void merge(value_t& value, const value_t& incomingRequest) override {
+		ASSERT(incomingRequest.transactions.size() == 1);
+
+		auto& arena = value.arena;
+		auto& current = value.transactions[0];
+		auto& incoming = incomingRequest.transactions[0];
+
+		ASSERT(current.read_snapshot == incoming.read_snapshot);
+		ASSERT(current.report_conflicting_keys == incoming.report_conflicting_keys);
+
+		// FIXME is this efficient?
+		current.read_conflict_ranges.append(arena, incoming.read_conflict_ranges.begin(),
+		                                    incoming.read_conflict_ranges.size());
+		current.write_conflict_ranges.append(arena, incoming.write_conflict_ranges.begin(),
+		                                     incoming.write_conflict_ranges.size());
+		current.mutations.append(arena, incoming.mutations.begin(), incoming.mutations.size());
+	}
+
+public:
+	explicit ResolveTransactionBatchRequestMerger(const std::chrono::milliseconds& expiringTime)
+	  : PartMerger(expiringTime) {}
+	explicit ResolveTransactionBatchRequestMerger(const std::chrono::seconds& expiringTime)
+	  : PartMerger(expiringTime) {}
+};
+
+ResolveTransactionBatchRequestMerger splitTransactionMerger(5s);
+// TimedKVCache<UID, Promise<>> splitTransactionResponse;
+} // namespace
 
 namespace {
 struct ProxyRequestsInfo {
@@ -307,6 +348,27 @@ ACTOR Future<Void> resolveBatch(
 	return Void();
 }
 
+#include "debug.h"
+
+ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTransactionBatchRequest batch) {
+	state const SplitTransaction& splitTransaction = batch.splitTransaction.get();
+	state const UID splitID = splitTransaction.id;
+	state const int partIndex = splitTransaction.partIndex;
+	state const int totalParts = splitTransaction.totalParts;
+
+	ASSERT(batch.transactions.size() == 1);
+	ASSERT(batch.splitTransaction.present());
+
+	if (batch.version - self->version.get() > SERVER_KNOBS->SPLIT_TRANSACTION_HISTORY_LENGTH) {
+		batch.reply.sendError(timed_out());
+	}
+
+	if (splitTransactionMerger.insert(splitID, partIndex, totalParts, batch)) {
+	}
+
+	return Void();
+}
+
 ACTOR Future<Void> resolverCore(
 	ResolverInterface resolver,
 	InitializeResolverRequest initReq)
@@ -320,7 +382,11 @@ ACTOR Future<Void> resolverCore(
 	TraceEvent("ResolverInit", resolver.id()).detail("RecoveryCount", initReq.recoveryCount);
 	loop choose {
 		when ( ResolveTransactionBatchRequest batch = waitNext( resolver.resolve.getFuture() ) ) {
-			actors.add( resolveBatch(self, batch) );
+			if (!batch.splitTransaction.present()) {
+				actors.add(resolveBatch(self, batch));
+			} else {
+				actors.add(splitTransactionResolver(self, batch));
+			}
 		}
 		when ( ResolutionMetricsRequest req = waitNext( resolver.metrics.getFuture() ) ) {
 			++self->metricsRequests;

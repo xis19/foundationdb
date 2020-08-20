@@ -167,14 +167,6 @@ struct SplitTransaction {
 };
 
 /**
- * When the values in all KV pairs in a given transaction is larger than this
- * value, the transaction will be split and distributed to multiple proxies,
- * if possible.
- * FIXME: change it to 1048576
- */
-constexpr int MAX_SINGLE_TRANSACTION_VALUES_SIZE = 110 * 1024;
-
-/**
  * Check if a transaction is large and should be split.
  *
  * @param commitTxnRequest Commit transaction request
@@ -208,7 +200,7 @@ struct CommitTransactionRequest : TimedRequest {
 	Optional<TagSet> tagSet;
 	Optional<SplitTransaction> splitTransaction;
 
-	CommitTransactionRequest() : flags(0) {}
+	CommitTransactionRequest() : flags(0), splitTransaction() {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {

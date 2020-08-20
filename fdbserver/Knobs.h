@@ -316,6 +316,7 @@ public:
 	double SAMPLE_EXPIRATION_TIME;
 	double SAMPLE_POLL_TIME;
 	int64_t RESOLVER_STATE_MEMORY_LIMIT;
+	int64_t SPLIT_TRANSACTION_HISTORY_LENGTH;
 
 	// Backup Worker
 	double BACKUP_TIMEOUT;  // master's reaction time for backup failure

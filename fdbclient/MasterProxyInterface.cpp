@@ -26,12 +26,31 @@
 #include <utility>
 #include <vector>
 
+#include "fdbclient/Knobs.h"
+#include "flow/IRandom.h"
+
+#include "debug.h"
+
+enum {
+	SPLIT_TRANSACTION_MASK = 0b1,
+
+	DISABLE_SPLIT_TRANSACTION = 0b0,
+	ENABLE_SPLIT_TRANSACTION = 0b1,
+
+	CONFLICTS_MASK = 0b110,
+
+	CONFLICTS_EVENLY_DISTRIBUTE = 0b000,
+	CONFLICTS_TO_ONE_PROXY = 0b010
+};
+
 bool shouldSplitCommitTransactionRequest(const CommitTransactionRequest& commitTxnRequest, const int numProxies) {
 
-	if (numProxies < 2 || commitTxnRequest.transaction.mutations.size() < 2) {
+	if (numProxies < 2 || commitTxnRequest.transaction.mutations.size() < 2 ||
+			(CLIENT_KNOBS->TRANSACTION_SPLIT_MODE & SPLIT_TRANSACTION_MASK == DISABLE_SPLIT_TRANSACTION)) {
 		return false;
 	}
 
+	// FIXME
 	for (auto& mutation : commitTxnRequest.transaction.mutations) {
 		if (mutation.param1.toString() == "do_split") {
 			return true;
@@ -42,15 +61,17 @@ bool shouldSplitCommitTransactionRequest(const CommitTransactionRequest& commitT
 	    std::accumulate(commitTxnRequest.transaction.mutations.begin(), commitTxnRequest.transaction.mutations.end(), 0,
 	                    [](int total, const MutationRef& ref) { return total + ref.param2.size(); });
 
-	return size >= MAX_SINGLE_TRANSACTION_VALUES_SIZE;
+	COUT << "Split?  " << "size="<<size<<"  tolerance="<<CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA<<" split="<<(size >= CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA) << std::endl;
+	return size >= CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA;
 }
 
+namespace {
 /**
  * In order to distribute the commit transactions to multiple proxies, all
  * commits must share the same read conflict and write conflicts, together with
  * the same splitID
  */
-static std::vector<CommitTransactionRequest> prepareSplitTransactions(const CommitTransactionRequest& commitTxnRequest,
+std::vector<CommitTransactionRequest> prepareSplitTransactions(const CommitTransactionRequest& commitTxnRequest,
                                                                       const int numProxies) {
 
 	std::vector<CommitTransactionRequest> result;
@@ -61,17 +82,53 @@ static std::vector<CommitTransactionRequest> prepareSplitTransactions(const Comm
 	for (auto i = 0; i < numProxies; ++i) {
 		result.emplace_back(CommitTransactionRequest(commitTxnRequest));
 
-		auto& newRef = result.back();
-		newRef.splitTransaction = SplitTransaction(splitID, numProxies, i);
+		auto& newRequest= result.back();
+		newRequest.splitTransaction = SplitTransaction(splitID, numProxies, i);
 
 		// Add FLAG_FIRST_IN_BATCH, to ensure the split transaction is single
-		newRef.flags |= CommitTransactionRequest::FLAG_FIRST_IN_BATCH;
+		newRequest.flags |= CommitTransactionRequest::FLAG_FIRST_IN_BATCH;
 
-		newRef.transaction.mutations = VectorRef<MutationRef>();
+		newRequest.transaction.mutations = VectorRef<MutationRef>();
+		newRequest.transaction.read_conflict_ranges = VectorRef<KeyRangeRef>();
+		newRequest.transaction.write_conflict_ranges = VectorRef<KeyRangeRef>();
+	}
+
+	// Distribute the conflicts to proxies
+	auto conflict_split_mode = CLIENT_KNOBS->TRANSACTION_SPLIT_MODE & CONFLICTS_MASK;
+
+	if (conflict_split_mode == CONFLICTS_TO_ONE_PROXY) {
+
+		const int proxyWithAllConflictsIndex = deterministicRandom()->randomInt(0, numProxies);
+		auto& requestWithAllConflicts = result[proxyWithAllConflictsIndex];
+		requestWithAllConflicts.transaction.read_conflict_ranges = commitTxnRequest.transaction.read_conflict_ranges;
+		requestWithAllConflicts.transaction.write_conflict_ranges = commitTxnRequest.transaction.write_conflict_ranges;
+
+	} else if (conflict_split_mode == CONFLICTS_EVENLY_DISTRIBUTE) {
+
+		const auto transaction = commitTxnRequest.transaction;
+		int proxyIndex = 0;
+
+		for (int i = 0; i < transaction.read_conflict_ranges.size(); ++i) {
+			result[proxyIndex].transaction.read_conflict_ranges.emplace_back(
+				result[proxyIndex].arena, transaction.read_conflict_ranges[i]
+			);
+			proxyIndex = (proxyIndex + 1) % numProxies;
+		}
+
+		for (int i = 0; i < transaction.write_conflict_ranges.size(); ++i) {
+			result[proxyIndex].transaction.write_conflict_ranges.emplace_back(
+				result[proxyIndex].arena, transaction.write_conflict_ranges[i]
+			);
+			proxyIndex = (proxyIndex + 1) % numProxies;
+		}
+
+	} else {
+		UNREACHABLE();
 	}
 
 	return result;
 }
+}	// anonymous amespace
 
 struct MutationValueSizeIndex {
 	int valueSize = 0;
@@ -89,7 +146,7 @@ struct MutationTotalValueSizeIndex {
 	}
 };
 
-static void distributeMutations(const CommitTransactionRequest& request,
+void distributeMutations(const CommitTransactionRequest& request,
                                 std::vector<CommitTransactionRequest>& splitCommitTxnRequests) {
 
 	const int NUM_PROXIES = splitCommitTxnRequests.size();
@@ -130,7 +187,7 @@ static void distributeMutations(const CommitTransactionRequest& request,
 		auto& currMutations = currTxnReq.transaction.mutations;
 		currMutations.push_back(arena,
 		                        // The mutation item is *copied* rather than *moved*, as the
-		                        // original transaction might still be useful by other part of the
+		                        // original transaction might still be useful by other parts of the
 		                        // code.
 		                        MutationRef(arena, mutations[item.index]));
 
@@ -148,6 +205,21 @@ std::vector<CommitTransactionRequest> splitCommitTransactionRequest(const Commit
 	std::vector<CommitTransactionRequest> result(prepareSplitTransactions(commitTxnRequest, numProxies));
 
 	distributeMutations(commitTxnRequest, result);
+
+	COUT << "Redistribution result: " << std::endl;
+
+	for (auto& r: result) {
+		std::cout<<"Proxy: "<<r.splitTransaction.get().partIndex<<std::endl;
+		std::cout<<"Mutations:"<<std::endl;
+		for(auto& m : r.transaction.mutations) 
+			std::cout << " key("<<m.param1.toString()<<")  value("<<m.param2.toString()<<")\n";
+		std::cout<<"Read conflict"<<std::endl;
+		for(auto& m : r.transaction.read_conflict_ranges) 
+			std::cout << " range("<<m.toString()<<")\n";
+		std::cout<<"Write conflict"<<std::endl;
+		for(auto& m : r.transaction.write_conflict_ranges) 
+			std::cout << " range("<<m.toString()<<")\n";
+	}
 
 	return result;
 }

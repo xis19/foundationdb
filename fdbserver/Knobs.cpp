@@ -390,6 +390,7 @@ void ServerKnobs::initialize(bool randomize, ClientKnobs* clientKnobs, bool isSi
 	init( SAMPLE_POLL_TIME,                                      0.1 );
 	init( RESOLVER_STATE_MEMORY_LIMIT,                           1e6 );
 	init( LAST_LIMITED_RATIO,                                    2.0 );
+	init( SPLIT_TRANSACTION_HISTORY_LENGTH,						 5e6 );
 
 	// Backup Worker
 	init( BACKUP_TIMEOUT,                                        0.4 );

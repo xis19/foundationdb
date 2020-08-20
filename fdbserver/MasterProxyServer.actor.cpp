@@ -54,6 +54,8 @@
 #include "flow/TDMetric.actor.h"
 #include "flow/Tracing.h"
 
+#include "debug.h"
+
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 ACTOR Future<Void> broadcastTxnRequest(TxnStateRequest req, int sendAmount, bool sendReply) {
@@ -329,6 +331,12 @@ struct ResolutionRequestBuilder {
 		}
 	}
 
+	void setSplitTransaction(const SplitTransaction& splitTransaction) {
+		for (auto& request : requests) {
+			request.splitTransaction = splitTransaction;
+		}
+	}
+
 	CommitTransactionRef& getOutTransaction(int resolver, Version read_snapshot) {
 		CommitTransactionRef *& out = outTr[resolver];
 		if (!out) {
@@ -466,9 +474,48 @@ ACTOR Future<Void> commitBatcher(ProxyCommitData *commitData, PromiseStream<std:
 						batchBytes = 0;
 					}
 
-					batch.push_back(req);
-					batchBytes += bytes;
-					commitData->commitBatchesMemBytesCount += bytes;
+					if (req.splitTransaction.present()) {
+						// The transaction is a split transaction, or part of
+						// a big transaction. In this case, all parts of the
+						// transactions should have the same version. In some
+						// cases. Consider the following schema:
+						//                   /-   TS1 -- Proxy1 (TS1P1)
+						// 	 Transaction 1  ---   TS1 -- Proxy2 (TS1P2)
+						//                   \-   TS1 -- Proxy3 (TS1P3)
+						// Assume TS1P1 is processed with Version TS1V, it is
+						// expected that TS1V will be used for TS1P2 and TS1P3.
+						// Now assume there is another transaction TS2, having
+						// similar distribution TS2P1, TS2P2 and TS2P3, with
+						// version TS2V.
+						// If TS1P2 and TS2P2 are batched now, then the master
+						// will be confused -- should it return TS1V or TS2V?
+						// A race condition is then introduced. The easiest way
+						// is simple -- do *NOT* batch any split transaction.
+						// This is acceptable since for split transaction, each
+						// part is already big enough.
+						//
+						// NOTE: In fdbclient/MasterProxyInterface.cpp,
+						// prepareSplitTransactions, it is guaranteed that the
+						// split transaction has flag FLAG_FIRST_IN_BATCH.
+						COUT << "commitBatcher: SplitID found: " << req.splitTransaction.get().id.toString()
+						     << std::endl;
+
+						// NOTE: Since the bytes from the split request is not
+						// part of the batch, we have to manually add bytes
+						// to total batches count.
+						out.send({ { req }, bytes });
+						commitData->commitBatchesMemBytesCount += bytes;
+
+						lastBatch = now();
+						timeout = delayJittered(commitData->commitBatchInterval, TaskPriority::ProxyCommitBatcher);
+
+						batch.clear();
+						batchBytes = 0;
+					} else {
+						batch.push_back(req);
+						batchBytes += bytes;
+						commitData->commitBatchesMemBytesCount += bytes;
+					}
 				}
 				when(wait(timeout)) {}
 			}
@@ -771,11 +818,24 @@ ACTOR Future<Void> preresolutionProcessing(CommitBatchContext* self) {
 
 	GetCommitVersionRequest req(self->span.context, pProxyCommitData->commitVersionRequestNumber++,
 	                            pProxyCommitData->mostRecentProcessedRequestNumber, pProxyCommitData->dbgid);
+	// NOTE A split transaction will only have a single item -- it will not be
+	// batched.
+	if (trs.size() == 1 && trs.front().splitTransaction.present()) {
+		req.splitID = trs.front().splitTransaction.get().id;
+		COUT << "Split ID: " << req.splitID.get().toString() << std::endl;
+
+		for (int i = 0; i < trs[0].transaction.mutations.size(); ++i) {
+			auto& m = trs[0].transaction.mutations[i];
+			std::cout << "  key(" << m.param1.toString() << ")   value(" << m.param2.toString() << ")" << std::endl;
+		}
+	}
 	GetCommitVersionReply versionReply = wait(brokenPromiseToNever(
 		pProxyCommitData->master.getCommitVersion.getReply(
 			req, TaskPriority::ProxyMasterVersionReply
 		)
 	));
+
+	COUT << "Commit version: " << versionReply.version << std::endl;
 
 	pProxyCommitData->mostRecentProcessedRequestNumber = versionReply.requestNum;
 
@@ -816,6 +876,13 @@ ACTOR Future<Void> getResolution(CommitBatchContext* self) {
 		pProxyCommitData->version,
         self->span
 	);
+
+	if (trs.size() > 0 && trs[0].splitTransaction.present()) {
+		// Transaction should not be batched if the split flag is on
+		ASSERT(trs.size() == 1);
+		requests.setSplitTransaction(trs[0].splitTransaction.get());
+	}
+
 	int conflictRangeCount = 0;
 	self->maxTransactionBytes = 0;
 	for (int t = 0; t < trs.size(); t++) {
@@ -1427,6 +1494,8 @@ ACTOR Future<Void> reply(CommitBatchContext* self) {
 
 }	// namespace CommitBatch
 
+#include "debug.h"
+
 // Commit one batch of transactions trs
 ACTOR Future<Void> commitBatch(
 		ProxyCommitData* self,
@@ -1434,6 +1503,23 @@ ACTOR Future<Void> commitBatch(
 		int currentBatchMemBytesCount) {
 	//WARNING: this code is run at a high priority (until the first delay(0)), so it needs to do as little work as possible
 	state CommitBatch::CommitBatchContext context(self, trs, currentBatchMemBytesCount);
+
+	for (int i = 0; i < context.trs.size(); ++i) {
+		COUT << " item=" << i << std::endl;
+		auto& tr = context.trs[i];
+		if (!tr.splitTransaction.present()) {
+			continue;
+		}
+		auto& split = tr.splitTransaction.get();
+		std::cout << "  SPLIT id=" << split.id.toString() << "  part=" << split.partIndex << "/" << split.totalParts
+		          << std::endl;
+		auto& txn = tr.transaction;
+		auto& mxn = txn.mutations;
+		for (int j = 0; j < mxn.size(); ++j) {
+			auto& m = mxn[j];
+			std::cout << m.param1.toString() << "\t" << m.param2.toString() << std::endl;
+		}
+	}
 
 	// Active load balancing runs at a very high priority (to obtain accurate estimate of memory used by commit batches) so we need to downgrade here
 	wait(delay(0, TaskPriority::ProxyCommit));
