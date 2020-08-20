@@ -40,20 +40,34 @@ public:
     explicit PartMerger(const std::chrono::milliseconds& expiringTime) : parts(expiringTime) {}
     explicit PartMerger(const std::chrono::seconds& expiringTime) : parts(expiringTime) {}
 
-    bool insert(const K& k, const int partIndex, const int totalParts, const V& v) {
+    bool insert(const key_t& k, const int partIndex, const int totalParts, const value_t& v) {
         if (!parts.exists(k)) {
-            parts.add(k, std::make_pair(std::vector<bool>(totalParts, false), V()));
+            parts.add(k, std::make_pair(std::vector<bool>(totalParts, false), v));
+            parts.get(k).first[partIndex] = true;
+        } else {
+            auto& existingItem = parts.get(k);
+            auto& partList = existingItem.first;
+            auto& existingValue = existingItem.second;
+            if (!partList[partIndex]) {
+                merge(existingValue, v);
+                partList[partIndex] = true;
+            }
         }
 
-        auto& existingItem = parts.get(k);
-        auto& partList = existingItem.first;
-        auto& existingValue = existingItem.second;
-        if (!partList[partIndex]) {
-            merge(existingValue, v);
-            partList[partIndex] = 1;
-        }
+        return isComplete(k);
+    }
 
+    bool isComplete(const key_t& k) {
+        const auto& partList = parts.get(k).first;
         return std::all_of(partList.begin(), partList.end(), [](bool v) { return v; });
+    }
+
+    bool exists(const key_t& key) const {
+        return parts.exists(key);
+    }
+
+    value_t& get(key_t key) {
+        return parts.get(key).second;
     }
 
 protected:

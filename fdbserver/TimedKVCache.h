@@ -75,25 +75,29 @@ public:
     }
 
     /**
+     * Remove a key from the cache
+     * @param key
+     */
+    void erase(const key_t& key) {
+        kvMapper.erase(key);
+    }
+
+    /**
      * Check if a given key exists, remove the expired keys
      * @param key
      * @return bool
      */
     bool exists(const key_t& key) {
         sweep();
-        return kvMapper.find(key) == kvMapper.end();
+        return kvMapper.find(key) != kvMapper.end();
     }
 
     /**
-     * Get the value of a key
+     * Get the value of a key, use exists to check if it is expired/removed first
      * @param key
      * @return value
      */
     value_t& get(const key_t& key) {
-        return const_cast<TimedKVCache*>(this)->get(key);
-    }
-
-    const value_t& get(const key_t& key) const {
         try {
             return kvMapper.at(key);
         } catch (std::out_of_range&) {
@@ -101,10 +105,15 @@ public:
         }
     }
 
+    const value_t& get(const key_t& key) const {
+        return const_cast<TimedKVCache*>(this)->get(key);
+    }
+
 private:
     std::list<std::pair<timepoint_t, key_t>> timestampedKey;
     std::unordered_map<key_t, value_t> kvMapper;
 
+protected:
     void sweep() {
         auto now = clock_t().now();
         while(!timestampedKey.empty() && 

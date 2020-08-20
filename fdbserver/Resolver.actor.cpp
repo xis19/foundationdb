@@ -40,7 +40,6 @@
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 namespace {
-using namespace std::literals::chrono_literals;
 
 class ResolveTransactionBatchRequestMerger : public PartMerger<UID, ResolveTransactionBatchRequest> {
 protected:
@@ -59,7 +58,7 @@ protected:
 		                                    incoming.read_conflict_ranges.size());
 		current.write_conflict_ranges.append(arena, incoming.write_conflict_ranges.begin(),
 		                                     incoming.write_conflict_ranges.size());
-		current.mutations.append(arena, incoming.mutations.begin(), incoming.mutations.size());
+		// Mutations are not useful in resolve context, and not touched
 	}
 
 public:
@@ -69,25 +68,24 @@ public:
 	  : PartMerger(expiringTime) {}
 };
 
-ResolveTransactionBatchRequestMerger splitTransactionMerger(5s);
-// TimedKVCache<UID, Promise<>> splitTransactionResponse;
-} // namespace
+const auto SPLIT_TRANSACTION_HISTORY = \
+	std::chrono::duration_cast<std::chrono::seconds>(std::chrono::microseconds(SERVER_KNOBS->SPLIT_TRANSACTION_HISTORY_LENGTH));
 
-namespace {
 struct ProxyRequestsInfo {
 	std::map<Version, ResolveTransactionBatchReply> outstandingBatches;
 	Version lastVersion;
 
 	ProxyRequestsInfo() : lastVersion(-1) {}
 };
-}
 
-namespace{
 struct Resolver : ReferenceCounted<Resolver> {
 	UID dbgid;
 	int proxyCount, resolverCount;
 	NotifiedVersion version;
 	AsyncVar<Version> neededVersion;
+
+	ResolveTransactionBatchRequestMerger splitTransactionMerger;
+	TimedKVCache<UID, Promise<Optional<ResolveTransactionBatchReply>>> splitTransactionResponse;
 
 	Map<Version, Standalone<VectorRef<StateTransactionRef>>> recentStateTransactions;
 	Deque<std::pair<Version, int64_t>> recentStateTransactionSizes;
@@ -119,7 +117,9 @@ struct Resolver : ReferenceCounted<Resolver> {
 	Future<Void> logger;
 
 	Resolver( UID dbgid, int proxyCount, int resolverCount )
-		: dbgid(dbgid), proxyCount(proxyCount), resolverCount(resolverCount), version(-1), conflictSet( newConflictSet() ), iopsSample( SERVER_KNOBS->KEY_BYTES_PER_SAMPLE ), debugMinRecentStateVersion(0),
+		: dbgid(dbgid), proxyCount(proxyCount), resolverCount(resolverCount), version(-1),
+		  splitTransactionMerger(SPLIT_TRANSACTION_HISTORY), splitTransactionResponse(SPLIT_TRANSACTION_HISTORY),
+		  conflictSet( newConflictSet() ), iopsSample( SERVER_KNOBS->KEY_BYTES_PER_SAMPLE ), debugMinRecentStateVersion(0),
 		  cc("Resolver", dbgid.toString()),
 		  resolveBatchIn("ResolveBatchIn", cc), resolveBatchStart("ResolveBatchStart", cc), resolvedTransactions("ResolvedTransactions", cc), resolvedBytes("ResolvedBytes", cc),
 		  resolvedReadConflictRanges("ResolvedReadConflictRanges", cc), resolvedWriteConflictRanges("ResolvedWriteConflictRanges", cc), transactionsAccepted("TransactionsAccepted", cc),
@@ -138,6 +138,16 @@ struct Resolver : ReferenceCounted<Resolver> {
 	}
 
 };
+
+template <typename Response_t>
+void sendResponse(Reference<Resolver> self, ResolveTransactionBatchRequest& req, const Response_t& response) {
+	if (!req.splitTransaction.present()) {
+		req.reply.send(response);
+	} else {
+		const UID& splitID = req.splitTransaction.get().id;
+		self->splitTransactionResponse.get(splitID).send(response);
+	}
+}
 } // namespace
 
 ACTOR Future<Void> resolveBatch(
@@ -176,6 +186,9 @@ ACTOR Future<Void> resolveBatch(
 	}
 
 	loop {
+		if (req.splitTransaction.present()) {
+			COUT <<"S3 my version:" << self->version.get() << " expecting "<<req.prevVersion<<"   split id "<<req.splitTransaction.get().id.toString()<<std::endl;
+		}
 		if( self->recentStateTransactionSizes.size() && proxyInfo.lastVersion <= self->recentStateTransactionSizes.front().first ) {
 			self->neededVersion.set( std::max(self->neededVersion.get(), req.prevVersion) );
 		}
@@ -330,25 +343,23 @@ ACTOR Future<Void> resolveBatch(
 	if(proxyInfoItr != self->proxyInfoMap.end()) {
 		auto batchItr = proxyInfoItr->second.outstandingBatches.find(req.version);
 		if(batchItr != proxyInfoItr->second.outstandingBatches.end()) {
-			req.reply.send(batchItr->second);
+			sendResponse(self, req, batchItr->second);
 		}
 		else {
 			TEST(true); // No outstanding batches for version on proxy
-			req.reply.send(Never());
+			sendResponse(self, req, Never());
 		}
 	}
 	else {
 		ASSERT_WE_THINK(false);  // The first non-duplicate request with this proxyAddress, including this one, should have inserted this item in the map!
 		//TEST(true); // No prior proxy requests
-		req.reply.send(Never());
+		sendResponse(self, req, Never());
 	}
 
 	++self->resolveBatchOut;
 
 	return Void();
 }
-
-#include "debug.h"
 
 ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTransactionBatchRequest batch) {
 	state const SplitTransaction& splitTransaction = batch.splitTransaction.get();
@@ -359,11 +370,25 @@ ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTra
 	ASSERT(batch.transactions.size() == 1);
 	ASSERT(batch.splitTransaction.present());
 
-	if (batch.version - self->version.get() > SERVER_KNOBS->SPLIT_TRANSACTION_HISTORY_LENGTH) {
-		batch.reply.sendError(timed_out());
+	if (!self->splitTransactionResponse.exists(splitID)) {
+		self->splitTransactionResponse.add(splitID, Promise<Optional<ResolveTransactionBatchReply>>());
 	}
 
-	if (splitTransactionMerger.insert(splitID, partIndex, totalParts, batch)) {
+	if (self->splitTransactionMerger.insert(splitID, partIndex, totalParts, batch)) {
+		COUT << "All components ready"<<std::endl;
+		ResolveTransactionBatchRequest& mergedBatch = self->splitTransactionMerger.get(splitID);
+		wait(resolveBatch(self, mergedBatch));
+		COUT<<"resolveBatch done"<<std::endl;
+	}
+
+	state Optional<ResolveTransactionBatchReply> reply = wait(self->splitTransactionResponse.get(splitID).getFuture());
+
+	if (reply.present()) {
+		COUT <<"Part "<<partIndex<<" reply response"<<std::endl;
+		batch.reply.send(reply.get());
+	} else {
+		COUT <<"Part "<<partIndex<<" reply Never"<<std::endl;
+		batch.reply.send(Never());
 	}
 
 	return Void();
