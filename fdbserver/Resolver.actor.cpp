@@ -186,9 +186,8 @@ ACTOR Future<Void> resolveBatch(
 	}
 
 	loop {
-		if (req.splitTransaction.present()) {
-			COUT <<"S3 my version:" << self->version.get() << " expecting "<<req.prevVersion<<"   split id "<<req.splitTransaction.get().id.toString()<<std::endl;
-		}
+		COUT <<"my version:" << self->version.get() << " expecting prevVersion "<<req.prevVersion<< " request version " << req.version<<
+			(req.splitTransaction.present() ? ("   split id " + req.splitTransaction.get().id.toString()) : "")<<std::endl;
 		if( self->recentStateTransactionSizes.size() && proxyInfo.lastVersion <= self->recentStateTransactionSizes.front().first ) {
 			self->neededVersion.set( std::max(self->neededVersion.get(), req.prevVersion) );
 		}
@@ -323,6 +322,7 @@ ACTOR Future<Void> resolveBatch(
 			}
 		}
 
+		COUT << "self->version is updated to " << req.version<<std::endl;
 		self->version.set( req.version );
 		bool breachedLimit = self->totalStateBytes.get() <= SERVER_KNOBS->RESOLVER_STATE_MEMORY_LIMIT && self->totalStateBytes.get() + stateBytes > SERVER_KNOBS->RESOLVER_STATE_MEMORY_LIMIT;
 		self->totalStateBytes.setUnconditional(self->totalStateBytes.get() + stateBytes);

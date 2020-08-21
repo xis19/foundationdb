@@ -1494,8 +1494,6 @@ ACTOR Future<Void> reply(CommitBatchContext* self) {
 
 }	// namespace CommitBatch
 
-#include "debug.h"
-
 // Commit one batch of transactions trs
 ACTOR Future<Void> commitBatch(
 		ProxyCommitData* self,

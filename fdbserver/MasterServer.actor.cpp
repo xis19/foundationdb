@@ -54,11 +54,14 @@ using std::vector;
 using std::min;
 using std::max;
 
+namespace {
 using namespace std::literals::chrono_literals;
 
 using SplitIDVersionCache = TimedKVCache<UID, Version>;
 
 SplitIDVersionCache splitIDVersionCache(5s);
+SplitIDVersionCache splitIDPrevVersionCache(5s);
+}
 
 struct ProxyVersionReplies {
 	std::map<uint64_t, GetCommitVersionReply> replies;
@@ -936,6 +939,7 @@ ACTOR Future<Void> recoverFrom( Reference<MasterData> self, Reference<ILogSystem
 
 	return Void();
 }
+#include "debug.h"
 
 ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionRequest req) {
 	state Span span("M:getVersion"_loc, { req.spanContext });
@@ -963,21 +967,22 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 	else {
 		GetCommitVersionReply rep;
 
+		Version repPrevVersion;
 		if(self->version == invalidVersion) {
 			self->lastVersionTime = now();
 			self->version = self->recoveryTransactionVersion;
-			rep.prevVersion = self->lastEpochEnd;
+			repPrevVersion = self->lastEpochEnd;
 		}
 		else {
 			double t1 = now();
 			if(BUGGIFY) {
 				t1 = self->lastVersionTime;
 			}
-			rep.prevVersion = self->version;
+			repPrevVersion = self->version;
 			self->version += std::max<Version>(1, std::min<Version>(SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS, SERVER_KNOBS->VERSIONS_PER_SECOND*(t1-self->lastVersionTime)));
 
-			TEST( self->version - rep.prevVersion == 1 );  // Minimum possible version gap
-			TEST( self->version - rep.prevVersion == SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS );  // Maximum possible version gap
+			TEST( self->version - repPrevVersion == 1 );  // Minimum possible version gap
+			TEST( self->version - repPrevVersion == SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS );  // Maximum possible version gap
 			self->lastVersionTime = t1;
 
 			if(self->resolverNeedingChanges.count(req.requestingProxy)) {
@@ -990,17 +995,28 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 			}
 		}
 
-		// FIXME rethink about this versioning issue -- any corner issues?
 		Version repVersion = self->version;
+
+		COUT << "master giving prev version " << repPrevVersion<< " and curr version " << repVersion <<std::endl;
 		if (req.splitID.present()) {
 			const auto& splitID = req.splitID.get();
-			if (!splitIDVersionCache.exists(splitID)) {
+			COUT<<"Seeing split id "<<splitID.toString()<<std::endl;
+			bool inCache = splitIDVersionCache.exists(splitID) && splitIDPrevVersionCache.exists(splitID);
+
+			if (!inCache) {
 				splitIDVersionCache.add(splitID, repVersion);
+				splitIDPrevVersionCache.add(splitID, repPrevVersion);
 			} else {
+				// Do not advance self->version since the transaction is part of a previous versioned one.
+				self->version = repPrevVersion;
+
 				repVersion = splitIDVersionCache.get(splitID);
+				repPrevVersion = splitIDPrevVersionCache.get(splitID);
 			}
+			COUT <<"due to split the prev version is " << repPrevVersion << " and curr version " << repVersion << std::endl;
 		}
 		rep.version = repVersion;
+		rep.prevVersion = repPrevVersion;
 		rep.requestNum = req.requestNum;
 
 		proxyItr->second.replies.erase(proxyItr->second.replies.begin(), proxyItr->second.replies.upper_bound(req.mostRecentProcessedRequestNum));

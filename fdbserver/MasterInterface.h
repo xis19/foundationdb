@@ -178,7 +178,7 @@ struct GetCommitVersionRequest {
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, requestNum, mostRecentProcessedRequestNum, requestingProxy, reply, spanContext);
+		serializer(ar, requestNum, mostRecentProcessedRequestNum, requestingProxy, reply, spanContext, splitID);
 	}
 };
 
