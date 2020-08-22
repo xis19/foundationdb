@@ -18,31 +18,34 @@
  * limitations under the License.
  */
 
-#include "flow/Hash3.h"
-#include "flow/UnitTest.h"
+#include "fdbclient/FDBTypes.h"
+#include "fdbclient/KeyRangeMap.h"
 #include "fdbclient/NativeAPI.actor.h"
 #include "fdbclient/Notified.h"
-#include "fdbclient/KeyRangeMap.h"
 #include "fdbclient/RunTransaction.actor.h"
 #include "fdbclient/SystemData.h"
-#include "fdbclient/FDBTypes.h"
-#include "fdbserver/WorkerInterface.actor.h"
-#include "fdbserver/LogProtocolMessage.h"
-#include "fdbserver/TLogInterface.h"
-#include "fdbserver/Knobs.h"
-#include "fdbserver/IKeyValueStore.h"
-#include "fdbserver/MutationTracking.h"
-#include "flow/ActorCollection.h"
 #include "fdbrpc/FailureMonitor.h"
-#include "fdbserver/IDiskQueue.h"
+#include "fdbrpc/Stats.h"
 #include "fdbrpc/sim_validation.h"
 #include "fdbrpc/simulator.h"
-#include "fdbrpc/Stats.h"
-#include "fdbserver/ServerDBInfo.h"
-#include "fdbserver/LogSystem.h"
-#include "fdbserver/WaitFailure.h"
-#include "fdbserver/RecoveryState.h"
 #include "fdbserver/FDBExecHelper.actor.h"
+#include "fdbserver/IDiskQueue.h"
+#include "fdbserver/IKeyValueStore.h"
+#include "fdbserver/Knobs.h"
+#include "fdbserver/LogProtocolMessage.h"
+#include "fdbserver/LogSystem.h"
+#include "fdbserver/MutationTracking.h"
+#include "fdbserver/RecoveryState.h"
+#include "fdbserver/ServerDBInfo.h"
+#include "fdbserver/TLogInterface.h"
+#include "fdbserver/WaitFailure.h"
+#include "fdbserver/WorkerInterface.actor.h"
+#include "flow/ActorCollection.h"
+#include "flow/Hash3.h"
+#include "flow/UnitTest.h"
+
+#include "debug.h"
+
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 using std::pair;
@@ -379,6 +382,7 @@ struct LogData : NonCopyable, public ReferenceCounted<LogData> {
 		    poppedRecently(r.poppedRecently), popped(r.popped), persistentPopped(r.persistentPopped),
 		    versionForPoppedLocation(r.versionForPoppedLocation), poppedLocation(r.poppedLocation), tag(r.tag),
 		    unpoppedRecovered(r.unpoppedRecovered) {}
+
 		void operator=(TagData&& r) noexcept {
 			versionMessages = std::move(r.versionMessages);
 			nothingPersistent = r.nothingPersistent;
@@ -1850,8 +1854,7 @@ ACTOR Future<Void> tLogCommit(
 		Reference<LogData> logData,
 		PromiseStream<Void> warningCollectorInput ) {
 	state Optional<UID> tlogDebugID;
-	if(req.debugID.present())
-	{
+	if(req.debugID.present()) {
 		tlogDebugID = nondeterministicRandom()->randomUniqueID();
 		g_traceBatch.addAttach("CommitAttachID", req.debugID.get().first(), tlogDebugID.get().first());
 		g_traceBatch.addEvent("CommitDebug", tlogDebugID.get().first(), "TLog.tLogCommit.BeforeWaitForVersion");
@@ -2213,10 +2216,15 @@ ACTOR Future<Void> serveTLogInterface( TLogData* self, TLogInterface tli, Refere
 			//TraceEvent("TLogCommitReq", logData->logId).detail("Ver", req.version).detail("PrevVer", req.prevVersion).detail("LogVer", logData->version.get());
 			ASSERT(logData->isPrimary);
 			TEST(logData->stopped); // TLogCommitRequest while stopped
-			if (!logData->stopped)
-				logData->addActor.send( tLogCommit( self, req, logData, warningCollectorInput ) );
-			else
+			if (!logData->stopped) {
+				if (!req.splitTransaction.present()) {
+					logData->addActor.send( tLogCommit( self, req, logData, warningCollectorInput ) );
+				} else {
+					COUT<<"Split transaction " << req.splitTransaction.get().id.toString()<<std::endl;
+				}
+			} else {
 				req.reply.sendError( tlog_stopped() );
+			}
 		}
 		when( ReplyPromise< TLogLockResult > reply = waitNext( tli.lock.getFuture() ) ) {
 			logData->addActor.send( tLogLock(self, reply, logData) );

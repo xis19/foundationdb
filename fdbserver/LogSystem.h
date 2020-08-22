@@ -24,14 +24,15 @@
 #include <set>
 #include <vector>
 
-#include "fdbserver/TLogInterface.h"
-#include "fdbserver/WorkerInterface.actor.h"
 #include "fdbclient/DatabaseConfiguration.h"
-#include "fdbserver/MutationTracking.h"
-#include "flow/IndexedSet.h"
-#include "fdbrpc/ReplicationPolicy.h"
+#include "fdbclient/MasterProxyInterface.h"
 #include "fdbrpc/Locality.h"
 #include "fdbrpc/Replication.h"
+#include "fdbrpc/ReplicationPolicy.h"
+#include "fdbserver/MutationTracking.h"
+#include "fdbserver/TLogInterface.h"
+#include "fdbserver/WorkerInterface.actor.h"
+#include "flow/IndexedSet.h"
 
 struct DBCoreState;
 struct TLogSet;
@@ -668,7 +669,7 @@ struct ILogSystem {
 		// Never returns normally, but throws an error if the subsystem stops working
 
 	//Future<Void> push( UID bundle, int64_t seq, VectorRef<TaggedMessageRef> messages );
-	virtual Future<Version> push( Version prevVersion, Version version, Version knownCommittedVersion, Version minKnownCommittedVersion, struct LogPushData& data, Optional<UID> debugID = Optional<UID>() ) = 0;
+	virtual Future<Version> push( Version prevVersion, Version version, Version knownCommittedVersion, Version minKnownCommittedVersion, struct LogPushData& data, Optional<UID> debugID = Optional<UID>(), Optional<SplitTransaction> splitTransaction = Optional<SplitTransaction>() ) = 0;
 		// Waits for the version number of the bundle (in this epoch) to be prevVersion (i.e. for all pushes ordered earlier)
 		// Puts the given messages into the bundle, each with the given tags, and with message versions (version, 0) - (version, N)
 		// Changes the version number of the bundle to be version (unblocking the next push)

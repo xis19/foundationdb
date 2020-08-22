@@ -140,7 +140,7 @@ struct Resolver : ReferenceCounted<Resolver> {
 };
 
 template <typename Response_t>
-void sendResponse(Reference<Resolver> self, ResolveTransactionBatchRequest& req, const Response_t& response) {
+void sendResolution(Reference<Resolver> self, ResolveTransactionBatchRequest& req, const Response_t& response) {
 	if (!req.splitTransaction.present()) {
 		req.reply.send(response);
 	} else {
@@ -148,7 +148,8 @@ void sendResponse(Reference<Resolver> self, ResolveTransactionBatchRequest& req,
 		self->splitTransactionResponse.get(splitID).send(response);
 	}
 }
-} // namespace
+
+} // anonymous namespace
 
 ACTOR Future<Void> resolveBatch(
 	Reference<Resolver> self, 
@@ -186,8 +187,6 @@ ACTOR Future<Void> resolveBatch(
 	}
 
 	loop {
-		COUT <<"my version:" << self->version.get() << " expecting prevVersion "<<req.prevVersion<< " request version " << req.version<<
-			(req.splitTransaction.present() ? ("   split id " + req.splitTransaction.get().id.toString()) : "")<<std::endl;
 		if( self->recentStateTransactionSizes.size() && proxyInfo.lastVersion <= self->recentStateTransactionSizes.front().first ) {
 			self->neededVersion.set( std::max(self->neededVersion.get(), req.prevVersion) );
 		}
@@ -322,7 +321,6 @@ ACTOR Future<Void> resolveBatch(
 			}
 		}
 
-		COUT << "self->version is updated to " << req.version<<std::endl;
 		self->version.set( req.version );
 		bool breachedLimit = self->totalStateBytes.get() <= SERVER_KNOBS->RESOLVER_STATE_MEMORY_LIMIT && self->totalStateBytes.get() + stateBytes > SERVER_KNOBS->RESOLVER_STATE_MEMORY_LIMIT;
 		self->totalStateBytes.setUnconditional(self->totalStateBytes.get() + stateBytes);
@@ -343,17 +341,17 @@ ACTOR Future<Void> resolveBatch(
 	if(proxyInfoItr != self->proxyInfoMap.end()) {
 		auto batchItr = proxyInfoItr->second.outstandingBatches.find(req.version);
 		if(batchItr != proxyInfoItr->second.outstandingBatches.end()) {
-			sendResponse(self, req, batchItr->second);
+			sendResolution(self, req, batchItr->second);
 		}
 		else {
 			TEST(true); // No outstanding batches for version on proxy
-			sendResponse(self, req, Never());
+			sendResolution(self, req, Never());
 		}
 	}
 	else {
 		ASSERT_WE_THINK(false);  // The first non-duplicate request with this proxyAddress, including this one, should have inserted this item in the map!
 		//TEST(true); // No prior proxy requests
-		sendResponse(self, req, Never());
+		sendResolution(self, req, Never());
 	}
 
 	++self->resolveBatchOut;
@@ -375,19 +373,15 @@ ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTra
 	}
 
 	if (self->splitTransactionMerger.insert(splitID, partIndex, totalParts, batch)) {
-		COUT << "All components ready"<<std::endl;
 		ResolveTransactionBatchRequest& mergedBatch = self->splitTransactionMerger.get(splitID);
 		wait(resolveBatch(self, mergedBatch));
-		COUT<<"resolveBatch done"<<std::endl;
 	}
 
 	state Optional<ResolveTransactionBatchReply> reply = wait(self->splitTransactionResponse.get(splitID).getFuture());
 
 	if (reply.present()) {
-		COUT <<"Part "<<partIndex<<" reply response"<<std::endl;
 		batch.reply.send(reply.get());
 	} else {
-		COUT <<"Part "<<partIndex<<" reply Never"<<std::endl;
 		batch.reply.send(Never());
 	}
 

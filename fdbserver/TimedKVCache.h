@@ -79,6 +79,8 @@ public:
      * @param key
      */
     void erase(const key_t& key) {
+        // We do not erase the key in the time range as it would be done by
+        // sweep
         kvMapper.erase(key);
     }
 

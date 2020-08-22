@@ -653,6 +653,8 @@ struct CommitBatchContext {
 
 	Optional<UID> debugID;
 
+	Optional<SplitTransaction> splitTransaction;
+
 	bool forceRecovery = false;
 
 	int64_t localBatchNumber;
@@ -755,6 +757,11 @@ CommitBatchContext::CommitBatchContext(ProxyCommitData* const pProxyCommitData_,
 		);
 	}
 
+	if (trs.size() >= 1 && trs[0].splitTransaction.present()) {
+		ASSERT(trs.size() == 1);
+		splitTransaction = trs[0].splitTransaction.get();
+	}
+
 	// since we are using just the former to limit the number of versions actually in flight!
 	ASSERT(SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS <= SERVER_KNOBS->MAX_VERSIONS_IN_FLIGHT);
 }
@@ -818,24 +825,11 @@ ACTOR Future<Void> preresolutionProcessing(CommitBatchContext* self) {
 
 	GetCommitVersionRequest req(self->span.context, pProxyCommitData->commitVersionRequestNumber++,
 	                            pProxyCommitData->mostRecentProcessedRequestNumber, pProxyCommitData->dbgid);
-	// NOTE A split transaction will only have a single item -- it will not be
-	// batched.
-	if (trs.size() == 1 && trs.front().splitTransaction.present()) {
-		req.splitID = trs.front().splitTransaction.get().id;
-		COUT << "Split ID: " << req.splitID.get().toString() << std::endl;
-
-		for (int i = 0; i < trs[0].transaction.mutations.size(); ++i) {
-			auto& m = trs[0].transaction.mutations[i];
-			std::cout << "  key(" << m.param1.toString() << ")   value(" << m.param2.toString() << ")" << std::endl;
-		}
-	}
 	GetCommitVersionReply versionReply = wait(brokenPromiseToNever(
 		pProxyCommitData->master.getCommitVersion.getReply(
 			req, TaskPriority::ProxyMasterVersionReply
 		)
 	));
-
-	COUT << "Commit version: " << versionReply.version << std::endl;
 
 	pProxyCommitData->mostRecentProcessedRequestNumber = versionReply.requestNum;
 
@@ -877,10 +871,8 @@ ACTOR Future<Void> getResolution(CommitBatchContext* self) {
         self->span
 	);
 
-	if (trs.size() > 0 && trs[0].splitTransaction.present()) {
-		// Transaction should not be batched if the split flag is on
-		ASSERT(trs.size() == 1);
-		requests.setSplitTransaction(trs[0].splitTransaction.get());
+	if (self->splitTransaction.present()) {
+		requests.setSplitTransaction(self->splitTransaction.get());
 	}
 
 	int conflictRangeCount = 0;
@@ -1298,9 +1290,19 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 	if ( self->prevVersion && self->commitVersion - self->prevVersion < SERVER_KNOBS->MAX_VERSIONS_IN_FLIGHT/2 )
 		debug_advanceMaxCommittedVersion(UID(), self->commitVersion);
 
+	return Void();
+}
+
+ACTOR Future<Void> transactionLogging(CommitBatchContext* self) {
+	state ProxyCommitData* const pProxyCommitData = self->pProxyCommitData;
+
 	self->commitStartTime = now();
 	pProxyCommitData->lastStartCommit = self->commitStartTime;
-	self->loggingComplete = pProxyCommitData->logSystem->push( self->prevVersion, self->commitVersion, pProxyCommitData->committedVersion.get(), pProxyCommitData->minKnownCommittedVersion, self->toCommit, self->debugID );
+
+	self->loggingComplete = pProxyCommitData->logSystem->push(
+		self->prevVersion, self->commitVersion, pProxyCommitData->committedVersion.get(),
+		pProxyCommitData->minKnownCommittedVersion, self->toCommit, self->debugID, self->splitTransaction
+	);
 
 	if (!self->forceRecovery) {
 		ASSERT(pProxyCommitData->latestLocalCommitBatchLogging.get() == self->localBatchNumber-1);
@@ -1316,12 +1318,6 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 			pProxyCommitData->commitComputePerOperation[self->latencyBucket] = SERVER_KNOBS->PROXY_COMPUTE_GROWTH_RATE*computePerOperation + ((1.0-SERVER_KNOBS->PROXY_COMPUTE_GROWTH_RATE)*pProxyCommitData->commitComputePerOperation[self->latencyBucket]);
 		}
 	}
-
-	return Void();
-}
-
-ACTOR Future<Void> transactionLogging(CommitBatchContext* self) {
-	state ProxyCommitData* const pProxyCommitData = self->pProxyCommitData;
 
 	try {
 		choose {

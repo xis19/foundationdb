@@ -66,8 +66,12 @@ public:
         return parts.exists(key);
     }
 
-    value_t& get(key_t key) {
+    value_t& get(const key_t& key) {
         return parts.get(key).second;
+    }
+
+    void erase(const key_t& key) {
+        return parts.erase(key);
     }
 
 protected:
