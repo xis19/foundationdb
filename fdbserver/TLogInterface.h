@@ -23,6 +23,7 @@
 #pragma once
 
 #include <iterator>
+#include <vector>
 
 #include "fdbclient/CommitTransaction.h"
 #include "fdbclient/FDBTypes.h"
@@ -247,16 +248,23 @@ struct TLogCommitRequest {
 
 	StringRef messages;// Each message prefixed by a 4-byte length
 
+	Optional<std::vector<std::pair<Arena, StringRef>>> additionalMessages;
+
 	ReplyPromise<TLogCommitReply> reply;
 	Optional<UID> debugID;
 	Optional<SplitTransaction> splitTransaction;
 
 	TLogCommitRequest() {}
-	TLogCommitRequest( const Arena& a, Version prevVersion, Version version, Version knownCommittedVersion, Version minKnownCommittedVersion, StringRef messages, Optional<UID> debugID, Optional<SplitTransaction> splitTransaction_ )
-		: arena(a), prevVersion(prevVersion), version(version), knownCommittedVersion(knownCommittedVersion), minKnownCommittedVersion(minKnownCommittedVersion), messages(messages), debugID(debugID), splitTransaction(splitTransaction_) {}
+	TLogCommitRequest(const Arena& a, Version prevVersion, Version version, Version knownCommittedVersion,
+	                  Version minKnownCommittedVersion, StringRef messages, Optional<UID> debugID,
+	                  Optional<SplitTransaction> splitTransaction_)
+	  : arena(a), prevVersion(prevVersion), version(version), knownCommittedVersion(knownCommittedVersion),
+	    minKnownCommittedVersion(minKnownCommittedVersion), messages(messages), debugID(debugID),
+	    splitTransaction(splitTransaction_) {}
 	template <class Ar>
 	void serialize( Ar& ar ) {
-		serializer(ar, prevVersion, version, knownCommittedVersion, minKnownCommittedVersion, messages, reply, arena, debugID, splitTransaction);
+		serializer(ar, prevVersion, version, knownCommittedVersion, minKnownCommittedVersion, messages, reply, arena,
+		           debugID, splitTransaction);
 	}
 };
 

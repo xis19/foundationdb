@@ -103,8 +103,11 @@ public:
         try {
             return kvMapper.at(key);
         } catch (std::out_of_range&) {
-            ASSERT(exists(key));
-        }
+			// Translate std error to FDB error
+			ASSERT(exists(key));
+			// This throw is to mute the control reaches end of non-void function warning
+			throw;
+		}
     }
 
     const value_t& get(const key_t& key) const {

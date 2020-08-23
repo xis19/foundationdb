@@ -46,7 +46,7 @@ enum {
 bool shouldSplitCommitTransactionRequest(const CommitTransactionRequest& commitTxnRequest, const int numProxies) {
 
 	if (numProxies < 2 || commitTxnRequest.transaction.mutations.size() < 2 ||
-			(CLIENT_KNOBS->TRANSACTION_SPLIT_MODE & SPLIT_TRANSACTION_MASK == DISABLE_SPLIT_TRANSACTION)) {
+	    ((CLIENT_KNOBS->TRANSACTION_SPLIT_MODE & SPLIT_TRANSACTION_MASK) == DISABLE_SPLIT_TRANSACTION)) {
 		return false;
 	}
 

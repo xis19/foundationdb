@@ -54,8 +54,6 @@
 #include "flow/TDMetric.actor.h"
 #include "flow/Tracing.h"
 
-#include "debug.h"
-
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 ACTOR Future<Void> broadcastTxnRequest(TxnStateRequest req, int sendAmount, bool sendReply) {
@@ -493,12 +491,10 @@ ACTOR Future<Void> commitBatcher(ProxyCommitData *commitData, PromiseStream<std:
 						// is simple -- do *NOT* batch any split transaction.
 						// This is acceptable since for split transaction, each
 						// part is already big enough.
-						//
+
 						// NOTE: In fdbclient/MasterProxyInterface.cpp,
 						// prepareSplitTransactions, it is guaranteed that the
 						// split transaction has flag FLAG_FIRST_IN_BATCH.
-						COUT << "commitBatcher: SplitID found: " << req.splitTransaction.get().id.toString()
-						     << std::endl;
 
 						// NOTE: Since the bytes from the split request is not
 						// part of the batch, we have to manually add bytes
@@ -825,6 +821,9 @@ ACTOR Future<Void> preresolutionProcessing(CommitBatchContext* self) {
 
 	GetCommitVersionRequest req(self->span.context, pProxyCommitData->commitVersionRequestNumber++,
 	                            pProxyCommitData->mostRecentProcessedRequestNumber, pProxyCommitData->dbgid);
+	if (self->splitTransaction.present()) {
+		req.splitID = self->splitTransaction.get().id;
+	}
 	GetCommitVersionReply versionReply = wait(brokenPromiseToNever(
 		pProxyCommitData->master.getCommitVersion.getReply(
 			req, TaskPriority::ProxyMasterVersionReply
@@ -1299,6 +1298,11 @@ ACTOR Future<Void> transactionLogging(CommitBatchContext* self) {
 	self->commitStartTime = now();
 	pProxyCommitData->lastStartCommit = self->commitStartTime;
 
+	if (self->splitTransaction.present()) {
+		std::cout << "Split " << self->splitTransaction.get().id.toString() << "    prev version " << self->prevVersion
+		          << "    version " << self->commitVersion << std::endl;
+	}
+
 	self->loggingComplete = pProxyCommitData->logSystem->push(
 		self->prevVersion, self->commitVersion, pProxyCommitData->committedVersion.get(),
 		pProxyCommitData->minKnownCommittedVersion, self->toCommit, self->debugID, self->splitTransaction
@@ -1497,23 +1501,6 @@ ACTOR Future<Void> commitBatch(
 		int currentBatchMemBytesCount) {
 	//WARNING: this code is run at a high priority (until the first delay(0)), so it needs to do as little work as possible
 	state CommitBatch::CommitBatchContext context(self, trs, currentBatchMemBytesCount);
-
-	for (int i = 0; i < context.trs.size(); ++i) {
-		COUT << " item=" << i << std::endl;
-		auto& tr = context.trs[i];
-		if (!tr.splitTransaction.present()) {
-			continue;
-		}
-		auto& split = tr.splitTransaction.get();
-		std::cout << "  SPLIT id=" << split.id.toString() << "  part=" << split.partIndex << "/" << split.totalParts
-		          << std::endl;
-		auto& txn = tr.transaction;
-		auto& mxn = txn.mutations;
-		for (int j = 0; j < mxn.size(); ++j) {
-			auto& m = mxn[j];
-			std::cout << m.param1.toString() << "\t" << m.param2.toString() << std::endl;
-		}
-	}
 
 	// Active load balancing runs at a very high priority (to obtain accurate estimate of memory used by commit batches) so we need to downgrade here
 	wait(delay(0, TaskPriority::ProxyCommit));

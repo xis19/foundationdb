@@ -58,14 +58,11 @@ protected:
 		                                    incoming.read_conflict_ranges.size());
 		current.write_conflict_ranges.append(arena, incoming.write_conflict_ranges.begin(),
 		                                     incoming.write_conflict_ranges.size());
-		// Mutations are not useful in resolve context, and not touched
+		// Mutations are not useful in the resolve context
 	}
 
 public:
-	explicit ResolveTransactionBatchRequestMerger(const std::chrono::milliseconds& expiringTime)
-	  : PartMerger(expiringTime) {}
-	explicit ResolveTransactionBatchRequestMerger(const std::chrono::seconds& expiringTime)
-	  : PartMerger(expiringTime) {}
+	using PartMerger::PartMerger;
 };
 
 const auto SPLIT_TRANSACTION_HISTORY = \
@@ -362,8 +359,6 @@ ACTOR Future<Void> resolveBatch(
 ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTransactionBatchRequest batch) {
 	state const SplitTransaction& splitTransaction = batch.splitTransaction.get();
 	state const UID splitID = splitTransaction.id;
-	state const int partIndex = splitTransaction.partIndex;
-	state const int totalParts = splitTransaction.totalParts;
 
 	ASSERT(batch.transactions.size() == 1);
 	ASSERT(batch.splitTransaction.present());
@@ -371,6 +366,9 @@ ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTra
 	if (!self->splitTransactionResponse.exists(splitID)) {
 		self->splitTransactionResponse.add(splitID, Promise<Optional<ResolveTransactionBatchReply>>());
 	}
+
+	const int partIndex = splitTransaction.partIndex;
+	const int totalParts = splitTransaction.totalParts;
 
 	if (self->splitTransactionMerger.insert(splitID, partIndex, totalParts, batch)) {
 		ResolveTransactionBatchRequest& mergedBatch = self->splitTransactionMerger.get(splitID);

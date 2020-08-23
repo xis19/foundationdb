@@ -939,7 +939,6 @@ ACTOR Future<Void> recoverFrom( Reference<MasterData> self, Reference<ILogSystem
 
 	return Void();
 }
-#include "debug.h"
 
 ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionRequest req) {
 	state Span span("M:getVersion"_loc, { req.spanContext });
@@ -997,10 +996,8 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 
 		Version repVersion = self->version;
 
-		COUT << "master giving prev version " << repPrevVersion<< " and curr version " << repVersion <<std::endl;
 		if (req.splitID.present()) {
 			const auto& splitID = req.splitID.get();
-			COUT<<"Seeing split id "<<splitID.toString()<<std::endl;
 			bool inCache = splitIDVersionCache.exists(splitID) && splitIDPrevVersionCache.exists(splitID);
 
 			if (!inCache) {
@@ -1013,7 +1010,6 @@ ACTOR Future<Void> getVersion(Reference<MasterData> self, GetCommitVersionReques
 				repVersion = splitIDVersionCache.get(splitID);
 				repPrevVersion = splitIDPrevVersionCache.get(splitID);
 			}
-			COUT <<"due to split the prev version is " << repPrevVersion << " and curr version " << repVersion << std::endl;
 		}
 		rep.version = repVersion;
 		rep.prevVersion = repPrevVersion;

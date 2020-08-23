@@ -502,7 +502,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	}
 
 	virtual Future<Version> push(Version prevVersion, Version version, Version knownCommittedVersion,
-	                     Version minKnownCommittedVersion, LogPushData& data, Optional<UID> debugID, Optional<SplitTransaction> splitTransaction) override final {
+	                             Version minKnownCommittedVersion, LogPushData& data, Optional<UID> debugID,
+	                             Optional<SplitTransaction> splitTransaction) override final {
 		// FIXME: Randomize request order as in LegacyLogSystem?
 		std::vector<Future<Void>> quorumResults;
 		std::vector<Future<TLogCommitReply>> allReplies;

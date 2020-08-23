@@ -18,6 +18,10 @@
  * limitations under the License.
  */
 
+#include <chrono>
+#include <type_traits>
+#include <vector>
+
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/KeyRangeMap.h"
 #include "fdbclient/NativeAPI.actor.h"
@@ -35,8 +39,10 @@
 #include "fdbserver/LogProtocolMessage.h"
 #include "fdbserver/LogSystem.h"
 #include "fdbserver/MutationTracking.h"
+#include "fdbserver/PartMerger.h"
 #include "fdbserver/RecoveryState.h"
 #include "fdbserver/ServerDBInfo.h"
+#include "fdbserver/TimedKVCache.h"
 #include "fdbserver/TLogInterface.h"
 #include "fdbserver/WaitFailure.h"
 #include "fdbserver/WorkerInterface.actor.h"
@@ -52,6 +58,32 @@ using std::pair;
 using std::make_pair;
 using std::min;
 using std::max;
+
+class TLogCommitRequestMerger : public PartMerger<UID, TLogCommitRequest> {
+protected:
+	virtual void merge(value_t& value, const value_t& incomingRequest) override {
+		ASSERT(value.prevVersion == incomingRequest.prevVersion);
+		ASSERT(value.version == incomingRequest.version);
+
+		// FIXME -- think about this
+		// ASSERT(value.knownCommittedVersion == incomingRequest.knownCommittedVersion);
+		// ASSERT(value.minKnownCommittedVersion == incomingRequest.minKnownCommittedVersion);
+		value.knownCommittedVersion = std::max(value.knownCommittedVersion, incomingRequest.knownCommittedVersion);
+		value.minKnownCommittedVersion =
+		    std::max(value.minKnownCommittedVersion, incomingRequest.minKnownCommittedVersion);
+
+		if (!value.additionalMessages.present()) {
+			value.additionalMessages = std::vector<std::pair<Arena, StringRef>>();
+		}
+		value.additionalMessages.get().emplace_back(std::make_pair(incomingRequest.arena, incomingRequest.messages));
+	}
+
+public:
+	using PartMerger::PartMerger;
+};
+
+const auto SPLIT_TRANSACTION_HISTORY = std::chrono::duration_cast<std::chrono::seconds>(
+    std::chrono::microseconds(SERVER_KNOBS->SPLIT_TRANSACTION_HISTORY_LENGTH));
 
 struct TLogQueueEntryRef {
 	UID id;
@@ -309,6 +341,9 @@ struct TLogData : NonCopyable {
 	UID dbgid;
 	UID workerID;
 
+	TLogCommitRequestMerger splitTransactionMerger;
+	TimedKVCache<UID, Promise<Version>> splitTransactionResponse;
+
 	IKeyValueStore* persistentData; // Durable data on disk that were spilled.
 	IDiskQueue* rawPersistentQueue; // The physical queue the persistentQueue below stores its data. Ideally, log interface should work without directly accessing rawPersistentQueue
 	TLogQueue *persistentQueue;	// Logical queue the log operates on and persist its data.
@@ -350,17 +385,20 @@ struct TLogData : NonCopyable {
 	Reference<AsyncVar<bool>> degraded;
 	std::vector<TagsAndMessage> tempTagMessages;
 
-	TLogData(UID dbgid, UID workerID, IKeyValueStore* persistentData, IDiskQueue * persistentQueue, Reference<AsyncVar<ServerDBInfo>> dbInfo, Reference<AsyncVar<bool>> degraded, std::string folder)
-			: dbgid(dbgid), workerID(workerID), instanceID(deterministicRandom()->randomUniqueID().first()),
-			  persistentData(persistentData), rawPersistentQueue(persistentQueue), persistentQueue(new TLogQueue(persistentQueue, dbgid)),
-			  dbInfo(dbInfo), degraded(degraded), queueCommitBegin(0), queueCommitEnd(0),
-			  diskQueueCommitBytes(0), largeDiskQueueCommitBytes(false), bytesInput(0), bytesDurable(0), targetVolatileBytes(SERVER_KNOBS->TLOG_SPILL_THRESHOLD), overheadBytesInput(0), overheadBytesDurable(0),
-			  peekMemoryLimiter(SERVER_KNOBS->TLOG_SPILL_REFERENCE_MAX_PEEK_MEMORY_BYTES),
-			  concurrentLogRouterReads(SERVER_KNOBS->CONCURRENT_LOG_ROUTER_READS),
-			  ignorePopRequest(false), ignorePopDeadline(), ignorePopUid(), dataFolder(folder), toBePopped()
-		{
-			cx = openDBOnServer(dbInfo, TaskPriority::DefaultEndpoint, true, true);
-		}
+	TLogData(UID dbgid, UID workerID, IKeyValueStore* persistentData, IDiskQueue* persistentQueue,
+	         Reference<AsyncVar<ServerDBInfo>> dbInfo, Reference<AsyncVar<bool>> degraded, std::string folder)
+	  : dbgid(dbgid), workerID(workerID), splitTransactionMerger(SPLIT_TRANSACTION_HISTORY),
+	    splitTransactionResponse(SPLIT_TRANSACTION_HISTORY),
+	    instanceID(deterministicRandom()->randomUniqueID().first()), persistentData(persistentData),
+	    rawPersistentQueue(persistentQueue), persistentQueue(new TLogQueue(persistentQueue, dbgid)), dbInfo(dbInfo),
+	    degraded(degraded), queueCommitBegin(0), queueCommitEnd(0), diskQueueCommitBytes(0),
+	    largeDiskQueueCommitBytes(false), bytesInput(0), bytesDurable(0),
+	    targetVolatileBytes(SERVER_KNOBS->TLOG_SPILL_THRESHOLD), overheadBytesInput(0), overheadBytesDurable(0),
+	    peekMemoryLimiter(SERVER_KNOBS->TLOG_SPILL_REFERENCE_MAX_PEEK_MEMORY_BYTES),
+	    concurrentLogRouterReads(SERVER_KNOBS->CONCURRENT_LOG_ROUTER_READS), ignorePopRequest(false),
+	    ignorePopDeadline(), ignorePopUid(), dataFolder(folder), toBePopped() {
+		cx = openDBOnServer(dbInfo, TaskPriority::DefaultEndpoint, true, true);
+	}
 };
 
 struct LogData : NonCopyable, public ReferenceCounted<LogData> {
@@ -1848,6 +1886,24 @@ ACTOR Future<Void> commitQueue( TLogData* self ) {
 	}
 }
 
+void sendCommitResponse(TLogData* self, TLogCommitRequest& req, const Version& response) {
+	if (!req.splitTransaction.present()) {
+		req.reply.send(response);
+	} else {
+		const UID& splitID = req.splitTransaction.get().id;
+		self->splitTransactionResponse.get(splitID).send(response);
+	}
+}
+
+void sendCommitResponse(TLogData* self, TLogCommitRequest& req, const Error& error) {
+	if (!req.splitTransaction.present()) {
+		req.reply.sendError(error);
+	} else {
+		const UID& splitID = req.splitTransaction.get().id;
+		self->splitTransactionResponse.get(splitID).sendError(error);
+	}
+}
+
 ACTOR Future<Void> tLogCommit(
 		TLogData* self,
 		TLogCommitRequest req,
@@ -1882,7 +1938,7 @@ ACTOR Future<Void> tLogCommit(
 	}
 
 	if(logData->stopped) {
-		req.reply.sendError( tlog_stopped() );
+		sendCommitResponse(self, req, tlog_stopped());
 		return Void();
 	}
 
@@ -1892,6 +1948,13 @@ ACTOR Future<Void> tLogCommit(
 
 		//TraceEvent("TLogCommit", logData->logId).detail("Version", req.version);
 		commitMessages(self, logData, req.version, req.arena, req.messages);
+
+		if (req.additionalMessages.present()) {
+			const auto& additionalMessages = req.additionalMessages.get();
+			for (size_t i = 0; i < additionalMessages.size(); ++i) {
+				commitMessages(self, logData, req.version, additionalMessages[i].first, additionalMessages[i].second);
+			}
+		}
 
 		logData->knownCommittedVersion = std::max(logData->knownCommittedVersion, req.knownCommittedVersion);
 
@@ -1920,14 +1983,41 @@ ACTOR Future<Void> tLogCommit(
 
 	if(stopped.isReady()) {
 		ASSERT(logData->stopped);
-		req.reply.sendError( tlog_stopped() );
+		sendCommitResponse(self, req, tlog_stopped());
 		return Void();
 	}
 
 	if(req.debugID.present())
 		g_traceBatch.addEvent("CommitDebug", tlogDebugID.get().first(), "TLog.tLogCommit.After");
 
-	req.reply.send( logData->durableKnownCommittedVersion );
+	sendCommitResponse(self, req, logData->durableKnownCommittedVersion);
+	return Void();
+}
+
+ACTOR Future<Void> tLogCommitSplitTransactions(TLogData* self, TLogCommitRequest req, Reference<LogData> logData,
+                                               PromiseStream<Void> warningCollectorInput) {
+
+	state const SplitTransaction& splitTransaction = req.splitTransaction.get();
+	state const UID splitID = splitTransaction.id;
+
+	const int partIndex = splitTransaction.partIndex;
+	const int totalParts = splitTransaction.totalParts;
+
+	if (!self->splitTransactionResponse.exists(splitID)) {
+		self->splitTransactionResponse.add(splitID, Promise<Version>());
+	}
+
+	if (self->splitTransactionMerger.insert(splitID, partIndex, totalParts, req)) {
+		wait(tLogCommit(self, self->splitTransactionMerger.get(splitID), logData, warningCollectorInput));
+	}
+
+	try {
+		state Version reply = wait(self->splitTransactionResponse.get(splitID).getFuture());
+		req.reply.send(reply);
+	} catch (Error& err) {
+		req.reply.sendError(err);
+	}
+
 	return Void();
 }
 
@@ -2217,10 +2307,14 @@ ACTOR Future<Void> serveTLogInterface( TLogData* self, TLogInterface tli, Refere
 			ASSERT(logData->isPrimary);
 			TEST(logData->stopped); // TLogCommitRequest while stopped
 			if (!logData->stopped) {
+				COUT << "req prevVersion " << req.prevVersion << " version " << req.version << " knownCommittedVersion "
+				     << req.knownCommittedVersion << " minKnownCommittedVersion " << req.minKnownCommittedVersion
+				     << std::endl;
+				COUT << " messages " << req.messages.toString() << std::endl;
 				if (!req.splitTransaction.present()) {
 					logData->addActor.send( tLogCommit( self, req, logData, warningCollectorInput ) );
 				} else {
-					COUT<<"Split transaction " << req.splitTransaction.get().id.toString()<<std::endl;
+					logData->addActor.send(tLogCommitSplitTransactions(self, req, logData, warningCollectorInput));
 				}
 			} else {
 				req.reply.sendError( tlog_stopped() );
