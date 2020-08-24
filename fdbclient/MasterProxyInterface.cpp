@@ -29,8 +29,6 @@
 #include "fdbclient/Knobs.h"
 #include "flow/IRandom.h"
 
-#include "debug.h"
-
 enum {
 	SPLIT_TRANSACTION_MASK = 0b1,
 
@@ -51,17 +49,20 @@ bool shouldSplitCommitTransactionRequest(const CommitTransactionRequest& commitT
 	}
 
 	// FIXME
-	for (auto& mutation : commitTxnRequest.transaction.mutations) {
-		if (mutation.param1.toString() == "do_split") {
-			return true;
-		}
-	}
+	/*for (auto& mutation : commitTxnRequest.transaction.mutations) {
+	    if (mutation.param1.toString() == "do_split") {
+	        return true;
+	    }
+	}*/
 
 	const int size =
 	    std::accumulate(commitTxnRequest.transaction.mutations.begin(), commitTxnRequest.transaction.mutations.end(), 0,
 	                    [](int total, const MutationRef& ref) { return total + ref.param2.size(); });
 
-	COUT << "Split?  " << "size="<<size<<"  tolerance="<<CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA<<" split="<<(size >= CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA) << std::endl;
+	TraceEvent("ShouldSplitCommitTransaction")
+	    .detail("Size", size)
+	    .detail("Criteria", CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA);
+
 	return size >= CLIENT_KNOBS->LARGE_TRANSACTION_CRITERIA;
 }
 
@@ -205,21 +206,6 @@ std::vector<CommitTransactionRequest> splitCommitTransactionRequest(const Commit
 	std::vector<CommitTransactionRequest> result(prepareSplitTransactions(commitTxnRequest, numProxies));
 
 	distributeMutations(commitTxnRequest, result);
-
-	COUT << "Redistribution result: " << std::endl;
-
-	for (auto& r: result) {
-		std::cout<<"Proxy: "<<r.splitTransaction.get().partIndex<<std::endl;
-		std::cout<<"Mutations:"<<std::endl;
-		for(auto& m : r.transaction.mutations) 
-			std::cout << " key("<<m.param1.toString()<<")  value("<<m.param2.toString()<<")\n";
-		std::cout<<"Read conflict"<<std::endl;
-		for(auto& m : r.transaction.read_conflict_ranges) 
-			std::cout << " range("<<m.toString()<<")\n";
-		std::cout<<"Write conflict"<<std::endl;
-		for(auto& m : r.transaction.write_conflict_ranges) 
-			std::cout << " range("<<m.toString()<<")\n";
-	}
 
 	return result;
 }

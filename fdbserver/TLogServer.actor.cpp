@@ -50,8 +50,6 @@
 #include "flow/Hash3.h"
 #include "flow/UnitTest.h"
 
-#include "debug.h"
-
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 using std::pair;
@@ -2307,10 +2305,6 @@ ACTOR Future<Void> serveTLogInterface( TLogData* self, TLogInterface tli, Refere
 			ASSERT(logData->isPrimary);
 			TEST(logData->stopped); // TLogCommitRequest while stopped
 			if (!logData->stopped) {
-				COUT << "req prevVersion " << req.prevVersion << " version " << req.version << " knownCommittedVersion "
-				     << req.knownCommittedVersion << " minKnownCommittedVersion " << req.minKnownCommittedVersion
-				     << std::endl;
-				COUT << " messages " << req.messages.toString() << std::endl;
 				if (!req.splitTransaction.present()) {
 					logData->addActor.send( tLogCommit( self, req, logData, warningCollectorInput ) );
 				} else {

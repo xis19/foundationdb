@@ -3323,8 +3323,6 @@ ACTOR Future<TransactionCommitCostEstimation> estimateCommitCosts(Transaction* s
 	return trCommitCosts;
 }
 
-#include "debug.h"
-
 ACTOR static Future<Void> tryCommitSingleTransaction(Transaction* tr, Future<Version> readVersion,
                                                      CommitTransactionRequest* pRequest = nullptr,
                                                      Version* pCommittedVersion = nullptr,
@@ -3380,7 +3378,6 @@ ACTOR static Future<Void> tryCommitSingleTransaction(Transaction* tr, Future<Ver
 		} else if (options.commitOnGivenProxy) {
 			const auto& proxies = cx->clientInfo->get().proxies;
 			const auto& proxy = proxies[req.splitTransaction.get().partIndex];
-			COUT << "commitOnGivenProxy: " << req.splitTransaction.get().partIndex << std::endl;
 			reply = brokenPromiseToMaybeDelivered(proxy.commit.getReply(req));
 		} else {
 			reply = basicLoadBalance( cx->getMasterProxies(info.useProvisionalProxies), &MasterProxyInterface::commit, req, TaskPriority::DefaultPromiseEndpoint, true );
@@ -3507,24 +3504,10 @@ ACTOR Future<Void> tryCommit(Transaction* tr, Future<Version> readVersion) {
 	state std::vector<Future<Void>> responses;
 
 	tr->options.commitOnGivenProxy = true;
-	for (int i = 0; i < numProxies; ++i) {
-		responses.emplace_back(tryCommitSingleTransaction(tr, readVersion, &commitTransactionRequests[i],
-		                                                  &committedVersions[i], &versionstampPromises[i]));
-		COUT << commitTransactionRequests[i].splitTransaction.get().id.toString() << "   "
-		     << commitTransactionRequests[i].splitTransaction.get().partIndex << "/"
-		     << commitTransactionRequests[i].splitTransaction.get().totalParts << std::endl;
-	}
-
 	try {
 		wait(waitForAll(responses));
 	} catch (Error& e) {
-		COUT << "ERROR: " << e.what() << std::endl;
 		throw;
-	}
-
-	for (int i = 0; i < numProxies; ++i) {
-		COUT << "Proxy " << i << " Committed Version " << committedVersions[i] << " Versionstamp "
-		     << versionstampPromises[i].getFuture().get().toHexString() << std::endl;
 	}
 
 	tr->getCommittedVersion() = committedVersions.front();

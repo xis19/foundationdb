@@ -360,6 +360,10 @@ ACTOR Future<Void> splitTransactionResolver(Reference<Resolver> self, ResolveTra
 	state const SplitTransaction& splitTransaction = batch.splitTransaction.get();
 	state const UID splitID = splitTransaction.id;
 
+	TraceEvent("SplitTransactionResolver")
+	    .detail("NumTransactionInBatch", batch.transactions.size())
+	    .detail("SplitID", batch.splitTransaction.get().id);
+
 	ASSERT(batch.transactions.size() == 1);
 	ASSERT(batch.splitTransaction.present());
 
