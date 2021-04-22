@@ -299,7 +299,8 @@ TEST_CASE("/fdbserver/ptxn/test/driver") {
 
 	wait(quorum(actors, 1));
 
-	return Void();
+// 	return Void();
+	throw internal_error();
 }
 
 TEST_CASE("fdbserver/ptxn/test/resolver") {
