@@ -26,6 +26,7 @@
 
 #include "fdbserver/ptxn/ProxyTLogPushMessageSerializer.h"
 #include "fdbserver/ptxn/test/Driver.h"
+#include "fdbserver/ptxn/test/Utils.h"
 #include "fdbserver/ptxn/TLogInterface.h"
 #include "flow/DeterministicRandom.h"
 #include "flow/flow.h"
@@ -82,7 +83,7 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 		}
 		++version;
 
-		printCommitRecord(pTestDriverContext->commitRecord);
+		print::printCommitRecord(pTestDriverContext->commitRecord);
 
 		wait(waitForAll(requests));
 

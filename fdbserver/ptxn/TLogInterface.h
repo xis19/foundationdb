@@ -115,6 +115,7 @@ struct TLogPeekRequest {
 	// Following the C++ custom, the endVersion is *EXCLUSIVE*.
 	Version beginVersion;
 	Optional<Version> endVersion;
+
 	TeamID teamID;
 
 	ReplyPromise<TLogPeekReply> reply;
@@ -128,6 +129,8 @@ struct TLogPeekRequest {
 struct TLogPopRequest {
 	static constexpr FileIdentifier file_identifier = 288041;
 
+	Optional<UID> debugID;
+
 	Version version;
 	TeamID teamID;
 
@@ -135,7 +138,7 @@ struct TLogPopRequest {
 
 	template <typename Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, version, teamID, reply);
+		serializer(ar, debugID, version, teamID, reply);
 	}
 };
 
