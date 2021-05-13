@@ -156,7 +156,7 @@ TLogStorageServerMessageDeserializer::iterator::iterator(const Arena& serialized
 }
 
 bool TLogStorageServerMessageDeserializer::iterator::operator==(const iterator& another) const {
-	return (rawSerializedData == another.rawSerializedData && sectionIndex == another.sectionIndex &&
+	return (rawSerializedData.begin() == another.rawSerializedData.begin() && sectionIndex == another.sectionIndex &&
 	        itemIndex == another.itemIndex);
 }
 

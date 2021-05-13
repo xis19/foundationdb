@@ -100,6 +100,10 @@ struct TLogPeekReply {
 	// StringRef referring the serialized mutation data, see TLogStorageServerPeekSerializer
 	StringRef data;
 
+	TLogPeekReply() {}
+	TLogPeekReply(const Optional<UID>& debugID_, Arena& arena_, StringRef data_)
+	  : debugID(debugID_), arena(arena_), data(data_) {}
+
 	template <typename Ar>
 	void serialize(Ar& ar) {
 		serializer(ar, debugID, arena, data);
@@ -119,6 +123,13 @@ struct TLogPeekRequest {
 	TeamID teamID;
 
 	ReplyPromise<TLogPeekReply> reply;
+
+	TLogPeekRequest() {}
+	TLogPeekRequest(const Optional<UID>& debugID_,
+	                const Version& beginVersion_,
+	                const Version& endVersion_,
+	                const TeamID& teamID_)
+	  : debugID(debugID_), beginVersion(beginVersion_), endVersion(endVersion_), teamID(teamID_) {}
 
 	template <typename Ar>
 	void serialize(Ar& ar) {

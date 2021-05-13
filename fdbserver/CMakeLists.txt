@@ -115,7 +115,7 @@ set(FDBSERVER_SRCS
   ptxn/TLogInterface.cpp
   ptxn/TLogInterface.h
   ptxn/TLogPeekCursor.actor.cpp
-  ptxn/TLogPeekCursor.h
+  ptxn/TLogPeekCursor.actor.h
   ptxn/TLogStorageServerPeekMessageSerializer.cpp
   ptxn/TLogStorageServerPeekMessageSerializer.h
 
