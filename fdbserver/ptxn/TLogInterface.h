@@ -100,7 +100,7 @@ struct TLogPeekReply {
 	// StringRef referring the serialized mutation data, see TLogStorageServerPeekSerializer
 	StringRef data;
 
-	TLogPeekReply() {}
+	TLogPeekReply() = default;
 	TLogPeekReply(const Optional<UID>& debugID_, Arena& arena_, StringRef data_)
 	  : debugID(debugID_), arena(arena_), data(data_) {}
 
