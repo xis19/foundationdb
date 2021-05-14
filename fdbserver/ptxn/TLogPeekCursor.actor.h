@@ -116,7 +116,7 @@ private:
 };
 
 // Connect to given TLog server(s) and peeks for mutations with a given TeamID
-class ServerTeamPeekCursor : public PeekCursorBase {
+class TLogGroupPeekCursor : public PeekCursorBase {
 	const TeamID teamID;
 	std::vector<TLogInterfaceBase*> pTLogInterfaces;
 
@@ -142,12 +142,12 @@ public:
 	// pArena_ is used to store the serialized data for further use, e.g. making MutationRefs still available after the
 	// cursor is destroyed. If pArena_ is nullptr, any reference to the peeked data will be invalidated after the cursor
 	// is destructed.
-	ServerTeamPeekCursor(const Version& version_,
+	TLogGroupPeekCursor(const Version& version_,
 	                     const TeamID& teamID_,
 	                     TLogInterfaceBase* pTLogInterface_,
 	                     Arena* pArena_ = nullptr);
 
-	ServerTeamPeekCursor(const Version& version_,
+	TLogGroupPeekCursor(const Version& version_,
 	                     const TeamID& teamID_,
 	                     const std::vector<TLogInterfaceBase*>& pTLogInterfaces_,
 	                     Arena* arena_ = nullptr);
@@ -274,7 +274,7 @@ protected:
 	virtual bool hasRemainingImpl() const override;
 };
 
-// Merges multiple ServerTeamPeekCursor, allowing adding/removing by TeamID.
+// Merges multiple TLogGroupPeekCursor, allowing adding/removing by TeamID.
 class MergedServerTeamPeekCursor : public MergedPeekCursor {
 private:
 	std::unordered_map<TeamID, CursorContainer::iterator> teamIDCursorMapper;
@@ -287,7 +287,7 @@ public:
 	template <typename Iterator>
 	MergedServerTeamPeekCursor(Iterator&& begin, Iterator&& end) : MergedPeekCursor(begin, end) {
 		for (auto iter = std::begin(cursorPtrs); iter != std::end(cursorPtrs); ++iter) {
-			const auto* pCursor = dynamic_cast<ServerTeamPeekCursor*>((*iter).get());
+			const auto* pCursor = dynamic_cast<TLogGroupPeekCursor*>((*iter).get());
 			ASSERT(pCursor != nullptr);
 			// NOTE std::dynamic_pointer_cast is not supporting std::unique_ptr.
 			const auto& teamID = pCursor->getTeamID();
@@ -295,7 +295,7 @@ public:
 		}
 	}
 
-	// Remove an existing ServerTeamPeekCursor by its TeamID
+	// Remove an existing TLogGroupPeekCursor by its TeamID
 	std::unique_ptr<PeekCursorBase> removeCursor(const TeamID&);
 
 	// Get all TeamIDs for currently active cursors
