@@ -1,3 +1,5 @@
+add_compile_options(-ftime-trace)
+
 fdb_find_sources(FDBCLIENT_SRCS)
 list(APPEND FDBCLIENT_SRCS sha1/SHA1.cpp)
 

@@ -1,3 +1,4 @@
+add_compile_options(-ftime-trace)
 fdb_find_sources(FDBRPC_SRCS)
 
 set(COMPILE_EIO OFF)

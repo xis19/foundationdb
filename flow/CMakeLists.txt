@@ -1,5 +1,7 @@
 find_package(Threads REQUIRED)
 
+add_compile_options(-ftime-trace)
+
 option(FLOW_USE_ZSTD "Enable zstd compression in flow" OFF)
 
 fdb_find_sources(FLOW_SRCS)

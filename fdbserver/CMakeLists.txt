@@ -1,5 +1,7 @@
 fdb_find_sources(FDBSERVER_SRCS)
 
+add_compile_options(-ftime-trace)
+
 if(${COROUTINE_IMPL} STREQUAL libcoro)
   list(APPEND FDBSERVER_SRCS coroimpl/CoroFlowCoro.actor.cpp)
 else()
