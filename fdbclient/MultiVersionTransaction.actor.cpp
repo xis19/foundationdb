@@ -18,6 +18,10 @@
  * limitations under the License.
  */
 
+#ifdef __unixish__
+#include <fcntl.h>
+#endif
+
 #include "fdbclient/IClientApi.h"
 #include "flow/Trace.h"
 #ifdef ADDRESS_SANITIZER
@@ -38,6 +42,10 @@
 #include "flow/Platform.h"
 #include "flow/ProtocolVersion.h"
 #include "flow/UnitTest.h"
+
+#ifdef __unixish__
+#include <fcntl.h>
+#endif // __unixish__
 
 #include "flow/actorcompiler.h" // This must be the last #include.
 
@@ -2532,8 +2540,6 @@ void MultiVersionApi::addExternalLibraryDirectory(std::string path) {
 	}
 }
 #if defined(__unixish__)
-#include <fcntl.h>
-
 std::vector<std::pair<std::string, bool>> MultiVersionApi::copyExternalLibraryPerThread(std::string path) {
 	ASSERT_GE(threadCount, 1);
 	// Copy library for each thread configured per version
@@ -2601,7 +2607,7 @@ std::vector<std::pair<std::string, bool>> MultiVersionApi::copyExternalLibraryPe
 
 	return paths;
 }
-#else
+#else // if defined (__unixish__)
 std::vector<std::pair<std::string, bool>> MultiVersionApi::copyExternalLibraryPerThread(std::string path) {
 	if (threadCount > 1) {
 		TraceEvent(SevError, "MultipleClientThreadsUnsupportedOnWindows").log();
@@ -2611,7 +2617,7 @@ std::vector<std::pair<std::string, bool>> MultiVersionApi::copyExternalLibraryPe
 	paths.push_back({ path, false });
 	return paths;
 }
-#endif
+#endif // if defined (__unixish__)
 
 void MultiVersionApi::disableLocalClient() {
 	MutexHolder holder(lock);
