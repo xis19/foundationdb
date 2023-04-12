@@ -120,8 +120,8 @@ template struct NetNotifiedQueue<GetServerDBInfoRequest, false>;
 template class GetEncryptCipherKeys<ServerDBInfo>;
 
 namespace {
+
 RoleLineageCollector roleLineageCollector;
-}
 
 ACTOR Future<std::vector<Endpoint>> tryDBInfoBroadcast(RequestStream<UpdateServerDBInfoRequest> stream,
                                                        UpdateServerDBInfoRequest req) {
@@ -133,6 +133,8 @@ ACTOR Future<std::vector<Endpoint>> tryDBInfoBroadcast(RequestStream<UpdateServe
 	req.broadcastInfo.push_back(stream.getEndpoint());
 	return req.broadcastInfo;
 }
+
+} // anonymous namespace
 
 ACTOR Future<std::vector<Endpoint>> broadcastDBInfoRequest(UpdateServerDBInfoRequest req,
                                                            int sendAmount,
@@ -1928,6 +1930,59 @@ void cleanupStorageDisks(Reference<AsyncVar<ServerDBInfo>> dbInfo,
 	}
 }
 
+namespace {
+void processUpdateServerDBInfoRequest(
+    const UpdateServerDBInfoRequest& req,
+    // XXX: Extract these parameters into a WorkerServerContext class
+    const LocalityData& localityData,
+    Reference<AsyncVar<ServerDBInfo>>& dbInfo,
+    WorkerInterface& workerInterface,
+    Reference<const AsyncVar<Optional<ClusterControllerFullInterface>>>& clusterControllerInterfaceRef,
+    ActorCollection& errorForwarders,
+    Future<Void>& updateClusterIdFuture,
+    Reference<AsyncVar<Optional<UID>>>& clusterIdRef,
+    const std::string& folder
+
+) {
+	ServerDBInfo localInfo =
+	    BinaryReader::fromStringRef<ServerDBInfo>(req.serializedDbInfo, AssumeVersion(g_network->protocolVersion()));
+	localInfo.myLocality = localityData;
+
+	if (localInfo.infoGeneration < dbInfo->get().infoGeneration &&
+	    localInfo.clusterInterface == dbInfo->get().clusterInterface) {
+		std::vector<Endpoint> rep = req.broadcastInfo;
+		rep.push_back(workerInterface.updateServerDBInfo.getEndpoint());
+		req.reply.send(rep);
+	} else {
+		Optional<Endpoint> notUpdated;
+		if (!clusterControllerInterfaceRef->get().present() ||
+		    localInfo.clusterInterface != clusterControllerInterfaceRef->get().get()) {
+			notUpdated = workerInterface.updateServerDBInfo.getEndpoint();
+		} else if (localInfo.infoGeneration > dbInfo->get().infoGeneration ||
+		           dbInfo->get().clusterInterface != clusterControllerInterfaceRef->get().get()) {
+			TraceEvent("GotServerDBInfoChange")
+			    .detail("ChangeID", localInfo.id)
+			    .detail("InfoGeneration", localInfo.infoGeneration)
+			    .detail("MasterID", localInfo.master.id())
+			    .detail("RatekeeperID", localInfo.ratekeeper.present() ? localInfo.ratekeeper.get().id() : UID())
+			    .detail("DataDistributorID", localInfo.distributor.present() ? localInfo.distributor.get().id() : UID())
+			    .detail("BlobManagerID", localInfo.blobManager.present() ? localInfo.blobManager.get().id() : UID())
+			    .detail("BlobMigratorID", localInfo.blobMigrator.present() ? localInfo.blobMigrator.get().id() : UID())
+			    .detail("EncryptKeyProxyID",
+			            localInfo.client.encryptKeyProxy.present() ? localInfo.client.encryptKeyProxy.get().id()
+			                                                       : UID());
+			dbInfo->set(localInfo);
+		}
+		errorForwarders.add(success(broadcastDBInfoRequest(req, SERVER_KNOBS->DBINFO_SEND_AMOUNT, notUpdated, true)));
+
+		if (!updateClusterIdFuture.isValid() && !clusterIdRef->get().present() &&
+		    localInfo.client.clusterId.isValid()) {
+			updateClusterIdFuture = updateClusterId(localInfo.client.clusterId, clusterIdRef, folder);
+		}
+	}
+}
+} // anonymous namespace
+
 ACTOR Future<Void> workerServer(Reference<IClusterConnectionRecord> connRecord,
                                 Reference<AsyncVar<Optional<ClusterControllerFullInterface>> const> ccInterface,
                                 LocalityData locality,
@@ -2369,47 +2424,15 @@ ACTOR Future<Void> workerServer(Reference<IClusterConnectionRecord> connRecord,
 
 		loop choose {
 			when(UpdateServerDBInfoRequest req = waitNext(interf.updateServerDBInfo.getFuture())) {
-				ServerDBInfo localInfo = BinaryReader::fromStringRef<ServerDBInfo>(
-				    req.serializedDbInfo, AssumeVersion(g_network->protocolVersion()));
-				localInfo.myLocality = locality;
-
-				if (localInfo.infoGeneration < dbInfo->get().infoGeneration &&
-				    localInfo.clusterInterface == dbInfo->get().clusterInterface) {
-					std::vector<Endpoint> rep = req.broadcastInfo;
-					rep.push_back(interf.updateServerDBInfo.getEndpoint());
-					req.reply.send(rep);
-				} else {
-					Optional<Endpoint> notUpdated;
-					if (!ccInterface->get().present() || localInfo.clusterInterface != ccInterface->get().get()) {
-						notUpdated = interf.updateServerDBInfo.getEndpoint();
-					} else if (localInfo.infoGeneration > dbInfo->get().infoGeneration ||
-					           dbInfo->get().clusterInterface != ccInterface->get().get()) {
-						TraceEvent("GotServerDBInfoChange")
-						    .detail("ChangeID", localInfo.id)
-						    .detail("InfoGeneration", localInfo.infoGeneration)
-						    .detail("MasterID", localInfo.master.id())
-						    .detail("RatekeeperID",
-						            localInfo.ratekeeper.present() ? localInfo.ratekeeper.get().id() : UID())
-						    .detail("DataDistributorID",
-						            localInfo.distributor.present() ? localInfo.distributor.get().id() : UID())
-						    .detail("BlobManagerID",
-						            localInfo.blobManager.present() ? localInfo.blobManager.get().id() : UID())
-						    .detail("BlobMigratorID",
-						            localInfo.blobMigrator.present() ? localInfo.blobMigrator.get().id() : UID())
-						    .detail("EncryptKeyProxyID",
-						            localInfo.client.encryptKeyProxy.present()
-						                ? localInfo.client.encryptKeyProxy.get().id()
-						                : UID());
-						dbInfo->set(localInfo);
-					}
-					errorForwarders.add(
-					    success(broadcastDBInfoRequest(req, SERVER_KNOBS->DBINFO_SEND_AMOUNT, notUpdated, true)));
-
-					if (!updateClusterIdFuture.isValid() && !clusterId->get().present() &&
-					    localInfo.client.clusterId.isValid()) {
-						updateClusterIdFuture = updateClusterId(localInfo.client.clusterId, clusterId, folder);
-					}
-				}
+				processUpdateServerDBInfoRequest(req,
+				                                 locality,
+				                                 dbInfo,
+				                                 interf,
+				                                 ccInterface,
+				                                 errorForwarders,
+				                                 updateClusterIdFuture,
+				                                 clusterId,
+				                                 folder);
 			}
 			when(RebootRequest req = waitNext(interf.clientInterface.reboot.getFuture())) {
 				state RebootRequest rebootReq = req;
