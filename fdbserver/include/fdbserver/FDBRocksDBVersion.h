@@ -21,8 +21,8 @@
 #ifndef FDBSERVER_FDBROCKSDBVERSION_H
 #define FDBSERVER_FDBROCKSDBVERSION_H
 
-#define FDB_ROCKSDB_MAJOR 9
-#define FDB_ROCKSDB_MINOR 7
-#define FDB_ROCKSDB_PATCH 3
+inline constexpr int FDB_ROCKSDB_MAJOR = 9;
+inline constexpr int FDB_ROCKSDB_MINOR = 7;
+inline constexpr int FDB_ROCKSDB_PATCH = 4;
 
 #endif
