@@ -184,8 +184,9 @@ set(WITH_LIBURING OFF CACHE BOOL "Build with liburing enabled") # Set this to ON
 
 # TOML can download and install itself into the binary directory, so it should
 # always be available.
-find_package(toml11 QUIET)
+find_package(toml11)
 if(toml11_FOUND)
+  message(STATUS "Using TOML11 from system")
   add_library(toml11_target INTERFACE)
   target_link_libraries(toml11_target INTERFACE toml11::toml11)
 else()
