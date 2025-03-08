@@ -83,13 +83,8 @@ function(generate_coverage_xml)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "Generate coverage xml")
   else()
-    add_custom_command(
-      OUTPUT ${target_file}
-      COMMAND dotnet build ${coveragetool_exe} ${target_file} ${in_files}
-      DEPENDS ${in_files}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      COMMENT "Generate coverage xml")
-  endif()
+    run_dotnet(${CMAKE_CURRENT_SOURCE_DIR}/coverage)
+ endif()
   add_custom_target(coverage_${target_name} ALL DEPENDS ${target_file})
   add_dependencies(coverage_${target_name} coveragetool)
 endfunction()
@@ -270,10 +265,17 @@ function(add_flow_target)
                     ${actor_compiler_flags}
             DEPENDS "${in_file}" actorcompiler
             COMMENT "Compile actor: ${src}")
-        else()
+        elseif(CSHARP_USE_MONO)
           add_custom_command(
             OUTPUT "${out_file}"
             COMMAND ${MONO_EXECUTABLE} ${actor_exe} "${in_file}" "${out_file}"
+                    ${actor_compiler_flags} > /dev/null
+            DEPENDS "${in_file}" actorcompiler
+            COMMENT "Compile actor: ${src}")
+          else()
+          add_custom_command(
+            OUTPUT "${out_file}"
+            COMMAND dotnet run ${actor_exe} "${in_file}" "${out_file}"
                     ${actor_compiler_flags} > /dev/null
             DEPENDS "${in_file}" actorcompiler
             COMMENT "Compile actor: ${src}")
