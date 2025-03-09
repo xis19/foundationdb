@@ -6,27 +6,12 @@ function(enable_csharp)
     return()
   endif()
 
-  find_program(_MONO_EXECUTABLE mono)
-  find_program(_MCS_EXECUTABLE mcs)
-  if(_MONO_EXECUTABLE AND _MCS_EXECUTABLE)
-	message("Using mono for C#")
-    set(CSHARP_USE_MONO
-        TRUE
-        PARENT_SCOPE)
-    set(MONO_EXECUTABLE
-        ${_MONO_EXECUTABBLE}
-        PARENT_SCOPE)
-    set(MCS_EXECUTABLE
-        ${_MONO_EXECUTABBLE}
-        PARENT_SCOPE)
-    return()
+  find_package(dotnet 9.0)
+  if (DOTNET_FOUND)
+	return()
   endif()
 
-  find_package(dotnet 9.0 REQUIRED)
-  message("Using Microsoft .NET framework for C#")
-  set(CSHARP_USE_MONO
-      FALSE
-      PARENT_SCOPE)
+  find_package(mono REQUIRED)
 endfunction()
 
 enable_csharp()
