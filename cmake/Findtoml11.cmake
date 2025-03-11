@@ -25,119 +25,22 @@ This module will set the following variables in your project:
 include(FindPackageHandleStandardArgs)
 include(FindPackageMessage)
 
-macro(_configure_use_jemalloc_config)
-  # Configure per jemalloc_config
-  execute_process(
-    COMMAND ${_jemalloc_CONFIG_PATH} --includedir
-    OUTPUT_VARIABLE jemalloc_INCLUDE_DIRS
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  execute_process(
-    COMMAND ${_jemalloc_CONFIG_PATH} --libdir
-    OUTPUT_VARIABLE jemalloc_LIBRARY_PATH
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  find_library(
-    jemalloc_LIBRARY
-    NAMES libjemalloc.a jemalloc
-    HINTS ${jemalloc_LIBRARY_PATH})
-  find_library(
-    jemalloc_pic_LIBRARY
-    NAMES libjemalloc_pic.a jemalloc_pic
-    HINTS ${jemalloc_LIBRARY_PATH})
-  execute_process(
-    COMMAND ${_jemalloc_CONFIG_PATH} --version
-    OUTPUT_VARIABLE jemalloc_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  if(jemalloc_INCLUDE_DIRS
-     AND jemalloc_LIBRARY
-     AND jemalloc_pic_LIBRARY
-     AND jemalloc_VERSION)
-    set(jemalloc_FOUND TRUE)
-  endif()
-endmacro()
-
-macro(_configure_jemalloc_target)
-  if(NOT TARGET jemalloc::jemalloc)
-    add_library(jemalloc::jemalloc UNKNOWN IMPORTED)
-    set_target_properties(
-      jemalloc::jemalloc
-      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${jemalloc_INCLUDE_DIRS}"
-                 IMPORTED_LOCATION "${jemalloc_LIBRARY}"
-                 VERSION "${jemalloc_VERSION}")
-  endif()
-endmacro()
-
-macro(_configure_jemalloc_pic_target)
-  if(NOT TARGET jemalloc_pic::jemalloc_pic)
-    add_library(jemalloc_pic::jemalloc_pic UNKNOWN IMPORTED)
-    set_target_properties(
-      jemalloc_pic::jemalloc_pic
-      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${jemalloc_INCLUDE_DIRS}"
-                 IMPORTED_LOCATION "${jemalloc_pic_LIBRARTY}"
-                 VERSION "${jemalloc_VERSION}")
-  endif()
-endmacro()
-
-macro(_finalize_find_package_jemalloc)
+macro(_finalize_find_package_toml11)
   find_package_handle_standard_args(
-    jemalloc
-    FOUND_VAR jemalloc_FOUND
-    REQUIRED_VARS jemalloc_INCLUDE_DIRS jemalloc_LIBRARY
-    VERSION_VAR jemalloc_VERSION)
-  mark_as_advanced(jemalloc_INCLUDE_DIRS jemalloc_LIBRARY jemalloc_VERSION
-                   jemalloc_FOUND)
+    toml11
+    FOUND_VAR toml11_FOUND
+    REQUIRED_VARS toml11_INCLUDE_DIRS)
+  mark_as_advanced(toml11_INCLUDE_DIRS toml11_FOUND)
 endmacro()
 
-if(NOT jemalloc_ROOT)
-  set(jemalloc_ROOT $ENV{jemalloc_ROOT})
+if(NOT toml11_ROOT)
+  set(toml11_ROOT $ENV{toml11_ROOT})
 endif()
 
-# First check if jemalloc_config.sh is available
-unset(_jemalloc_CONFIG_PATH)
-set(jemalloc_FOUND FALSE)
-find_program(
-  _jemalloc_CONFIG_PATH
-  NAMES jemalloc-config
-  HINTS ${jemalloc_ROOT})
-
-if(_jemalloc_CONFIG_PATH)
-  _configure_use_jemalloc_config()
-  if(jemalloc_FOUND)
-    find_package_message(
-      jemalloc "Found jemalloc by jemalloc.config: ${jemalloc_LIBRARY}"
-      "[${jemalloc_LIBRARY}][${jemalloc_INCLUDE_DIRS}]")
-    _configure_jemalloc_target()
-    if(jemalloc_pic_LIBRARY)
-      _configure_jemalloc_pic_target()
-    endif()
-    _finalize_find_package_jemalloc()
-    return()
-  endif()
-endif()
-
-# Manual find jemalloc by hand
 find_path(
-  jemalloc_INCLUDE_DIRS
-  NAMES jemalloc/jemalloc.h
-  PATH_SUFFIXES jemalloc jemalloc/include
-  HINTS ${jemalloc_ROOT})
-if(NOT jemalloc_INCLUDE_DIRS)
-  _finalize_find_package_jemalloc()
-  return()
-endif()
-find_library(
-  jemalloc_LIBRARY
-  NAMES libjemalloc.a
-  HINTS ${jemalloc_ROOT})
-if(jemalloc_LIBRARY)
-  set(jemalloc_FOUND TRUE)
-  _configure_jemalloc_target()
-endif()
-find_library(
-  jemalloc_pic_LIBRARY
-  NAMES libjemalloc_pic.a
-  HINTS ${jemalloc_ROOT})
-if(jemalloc_pic_LIBRARY)
-  _configure_jemalloc_pic_target()
-endif()
+  toml11_INCLUDE_DIRS
+  NAMES toml.hpp
+  PATH_SUFFIXES include include/toml11
+  HINTS ${toml11_ROOT})
 
-_finalize_find_package_jemalloc()
+_finalize_find_package_toml11()
