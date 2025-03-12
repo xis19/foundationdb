@@ -32,6 +32,7 @@ execute_process(
   COMMAND ${Python3_EXECUTABLE} -c "import jinja2; print(jinja2.__version__)"
   RESULT_VARIABLE _Jinja2_NOT_FOUND
   OUTPUT_VARIABLE _Jinja2_VERSION_STRING
+  ERROR_VARIABLE _Jinja2_STDERR_STRING
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 if(NOT _Jinja2_NOT_FOUND)

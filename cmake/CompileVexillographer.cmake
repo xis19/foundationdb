@@ -38,6 +38,7 @@ function(vexillographer_compile)
   if(NOT VX_OUTPUT)
     set(VX_OUTPUT ${VX_OUT})
   endif()
+
   if(WIN32)
     add_custom_command(
       OUTPUT ${VX_OUTPUT}
@@ -72,6 +73,7 @@ function(vexillographer_compile)
       SOURCES
       ${VEXILLOGRAPHER_SRCS})
   endif()
+
   if(VX_ALL)
     add_custom_target(${VX_TARGET} ALL DEPENDS ${VX_OUTPUT})
   else()
