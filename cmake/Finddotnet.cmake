@@ -135,7 +135,7 @@
 #
 # Require 3.5 for batch copy multiple files
 
-cmake_minimum_required(VERSION 3.11.0)
+cmake_minimum_required(VERSION 3.10.0)
 
 if(DOTNET_FOUND)
   return()
@@ -143,7 +143,7 @@ endif()
 
 set(NUGET_CACHE_PATH "~/.nuget/packages")
 find_program(DOTNET_EXE dotnet)
-set(DOTNET_MODULE_DIR ${CMAKE_CURRENT_LIST_DIR})
+set(DOTNET_MODULE_DIR ${CMAKE_CURRENT_LIST_DIR} PARENT_SCOPE)
 
 if(NOT DOTNET_EXE)
   set(DOTNET_FOUND FALSE)
