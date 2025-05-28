@@ -23,6 +23,6 @@
 
 inline constexpr int FDB_ROCKSDB_MAJOR = 9;
 inline constexpr int FDB_ROCKSDB_MINOR = 7;
-inline constexpr int FDB_ROCKSDB_PATCH = 4;
+inline constexpr int FDB_ROCKSDB_PATCH = 3;
 
 #endif
